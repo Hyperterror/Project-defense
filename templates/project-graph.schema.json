@@ -1,0 +1,276 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://project-defense-coach/schemas/project-graph.schema.json",
+  "title": "Project Graph",
+  "description": "Machine-readable representation of a repository's architecture, used to generate docs, diagrams, learning paths, and interview questions.",
+  "type": "object",
+  "required": ["project", "frontend", "backend", "data", "auth", "user_flows", "data_flows", "risks", "uncertainties"],
+  "additionalProperties": false,
+  "properties": {
+    "project": {
+      "type": "object",
+      "required": ["name", "purpose", "stack", "entry_points"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "purpose": { "type": "string", "minLength": 10 },
+        "stack": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "entry_points": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["file", "type"],
+            "additionalProperties": false,
+            "properties": {
+              "file": { "type": "string" },
+              "type": { "enum": ["frontend", "backend", "cli", "worker", "other"] },
+              "description": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "frontend": {
+      "type": "object",
+      "required": ["pages", "components", "state_management", "api_calls"],
+      "additionalProperties": false,
+      "properties": {
+        "pages": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/graphEntry" }
+        },
+        "components": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/graphEntry" }
+        },
+        "state_management": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/graphEntry" }
+        },
+        "api_calls": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/graphEntry" }
+        }
+      }
+    },
+    "backend": {
+      "type": "object",
+      "required": ["routes", "middleware", "controllers", "services"],
+      "additionalProperties": false,
+      "properties": {
+        "routes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/routeEntry" }
+        },
+        "middleware": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/graphEntry" }
+        },
+        "controllers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/graphEntry" }
+        },
+        "services": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/graphEntry" }
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "required": ["models", "relationships", "migrations"],
+      "additionalProperties": false,
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/modelEntry" }
+        },
+        "relationships": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["from", "to", "type", "evidence"],
+            "additionalProperties": false,
+            "properties": {
+              "from": { "type": "string" },
+              "to": { "type": "string" },
+              "type": { "enum": ["hasOne", "hasMany", "belongsTo", "manyToMany", "references"] },
+              "evidence": { "$ref": "#/$defs/evidence" }
+            }
+          }
+        },
+        "migrations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/graphEntry" }
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "required": ["strategy", "token_handling", "protected_routes"],
+      "additionalProperties": false,
+      "properties": {
+        "strategy": { "type": "string", "enum": ["JWT", "session", "cookie", "OAuth", "API key", "none", "other"] },
+        "token_handling": { "type": "string" },
+        "protected_routes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/graphEntry" }
+        }
+      }
+    },
+    "user_flows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "steps", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["actor", "action", "target"],
+              "additionalProperties": false,
+              "properties": {
+                "actor": { "type": "string", "enum": ["user", "frontend", "backend", "database", "external"] },
+                "action": { "type": "string" },
+                "target": { "type": "string" },
+                "data": { "type": "string" }
+              }
+            }
+          },
+          "evidence": { "$ref": "#/$defs/evidence" }
+        }
+      }
+    },
+    "data_flows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "steps", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["from", "to", "data", "transform"],
+              "additionalProperties": false,
+              "properties": {
+                "from": { "type": "string" },
+                "to": { "type": "string" },
+                "data": { "type": "string" },
+                "transform": { "type": "string" }
+              }
+            }
+          },
+          "evidence": { "$ref": "#/$defs/evidence" }
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["description", "severity", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "description": { "type": "string" },
+          "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
+          "evidence": { "$ref": "#/$defs/evidence" },
+          "mitigation": { "type": "string" }
+        }
+      }
+    },
+    "uncertainties": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["question", "context", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "question": { "type": "string" },
+          "context": { "type": "string" },
+          "evidence": { "$ref": "#/$defs/evidence" },
+          "impact_if_wrong": { "type": "string" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "required": ["file", "lines", "excerpt", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "lines": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1 },
+          "minItems": 1,
+          "maxItems": 2
+        },
+        "excerpt": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["code-verified", "user-provided", "UNVERIFIED"] }
+      }
+    },
+    "graphEntry": {
+      "type": "object",
+      "required": ["name", "details", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "details": { "type": "object" },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      }
+    },
+    "routeEntry": {
+      "type": "object",
+      "required": ["method", "path", "handler", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"] },
+        "path": { "type": "string", "minLength": 1 },
+        "handler": { "type": "string" },
+        "middleware": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      }
+    },
+    "modelEntry": {
+      "type": "object",
+      "required": ["name", "fields", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "type"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string" },
+              "type": { "type": "string" },
+              "required": { "type": "boolean" },
+              "unique": { "type": "boolean" },
+              "indexed": { "type": "boolean" },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      }
+    }
+  }
+}

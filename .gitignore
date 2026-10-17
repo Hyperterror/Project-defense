@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Project-defense artifacts (created when running the scanner/detectors on this skill folder for testing, and committed inside the example projects as fixtures)
+**/.project-defense/
+
+# Secrets and local environment (defense in depth -- these should never be committed)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.secret
+*.token
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# OS
+Thumbs.db
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
