@@ -33,22 +33,25 @@ It also has two interactive coaching modes that build on the analyzed graph:
 The fastest way to install this skill into your AI coding agent is with the
 [skills CLI](https://github.com/antfu/skills-cli) (the open agent-skills
 package manager). It auto-detects your agent's skills directory and symlinks
-the skill folder — no manual `cp` needed.
+the skill folder — no manual `cp` and **no fork required**. Users install
+directly from the published repo.
 
 ```bash
 # 1. Install the skill (interactively pick which agent(s) to target)
-npx skills add <your-github-user>/Project-defense
+#    Replace <owner>/project-defense with the repo where this skill is published.
+npx skills add <owner>/project-defense
 
-#    Or target a specific agent directly:
-npx skills add <your-github-user>/Project-defense -a claude-code
-npx skills add <your-github-user>/Project-defense -a antigravity
-npx skills add <your-github-user>/Project-defense -a codex
+#    Pin the exact skill by name (matches the `name` in SKILL.md frontmatter)
+#    and target a specific agent, non-interactively:
+npx -y skills add <owner>/project-defense --skill project-defense-skill --agent claude-code
+npx -y skills add <owner>/project-defense --skill project-defense-skill --agent antigravity
+npx -y skills add <owner>/project-defense --skill project-defense-skill --agent codex
 
 #    Install to all detected agents at once:
-npx skills add <your-github-user>/Project-defense --all
+npx skills add <owner>/project-defense --all
 
 #    Install globally (available across all your projects) instead of per-project:
-npx skills add <your-github-user>/Project-defense -g
+npx skills add <owner>/project-defense -g
 
 # 2. Open your project in the agent and invoke the skill
 #    "Run the project-defense skill on this repository"
@@ -64,9 +67,10 @@ npx skills add <your-github-user>/Project-defense -g
 #    - After you confirm, generate all artifacts in .project-defense/
 ```
 
-Replace `<your-github-user>` with the GitHub owner of your fork. The skills
-CLI finds the `SKILL.md` at the repo root and installs the skill folder along
-with its `scripts/`, `templates/`, `rubrics/`, and `instructions/`.
+`<owner>/project-defense` is the GitHub `owner/repo` where this skill is
+published. The skills CLI finds the `SKILL.md` at the repo root and installs
+the skill folder along with its `scripts/`, `templates/`, `rubrics/`, and
+`instructions/`. You do not need to fork — install straight from the public repo.
 
 ### Use with a GitHub URL
 
@@ -289,19 +293,24 @@ if that fails, redirects to /login."
 
 ## Installation by Agent
 
-Use `npx skills add` — it handles the right directory for every agent automatically.
+Use `npx skills add` — it handles the right directory for every agent automatically. Users install directly from the published repo; no fork required.
 
 ```bash
-# Specific agent
-npx skills add <your-github-user>/Project-defense -a claude-code
-npx skills add <your-github-user>/Project-defense -a antigravity
-npx skills add <your-github-user>/Project-defense -a codex
-npx skills add <your-github-user>/Project-defense -a cursor
-npx skills add <your-github-user>/Project-defense -a opencode
+# Pin the skill and target a specific agent (non-interactive, CI/CD-friendly)
+npx -y skills add <owner>/project-defense --skill project-defense-skill --agent claude-code
+npx -y skills add <owner>/project-defense --skill project-defense-skill --agent antigravity
+npx -y skills add <owner>/project-defense --skill project-defense-skill --agent codex
+npx -y skills add <owner>/project-defense --skill project-defense-skill --agent cursor
+npx -y skills add <owner>/project-defense --skill project-defense-skill --agent opencode
 
 # All detected agents at once
-npx skills add <your-github-user>/Project-defense --all
+npx skills add <owner>/project-defense --all
 ```
+
+`<owner>/project-defense` is the `owner/repo` where this skill is published on
+GitHub. `--skill project-defense-skill` matches the `name` field in this repo's
+`SKILL.md` frontmatter and selects it explicitly (handy if a repo ever ships
+more than one skill).
 
 The CLI supports 30+ agents and lets you choose between a **symlink** (single
 source of truth, easy updates) or a **copy** (useful when symlinks aren't
