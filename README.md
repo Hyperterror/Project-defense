@@ -38,20 +38,19 @@ directly from the published repo.
 
 ```bash
 # 1. Install the skill (interactively pick which agent(s) to target)
-#    Replace <owner>/project-defense with the repo where this skill is published.
-npx skills add <owner>/project-defense
+npx skills add Hyperterror/Project-defense
 
 #    Pin the exact skill by name (matches the `name` in SKILL.md frontmatter)
 #    and target a specific agent, non-interactively:
-npx -y skills add <owner>/project-defense --skill project-defense-skill --agent claude-code
-npx -y skills add <owner>/project-defense --skill project-defense-skill --agent antigravity
-npx -y skills add <owner>/project-defense --skill project-defense-skill --agent codex
+npx -y skills add Hyperterror/Project-defense --skill project-defense-skill --agent claude-code
+npx -y skills add Hyperterror/Project-defense --skill project-defense-skill --agent antigravity
+npx -y skills add Hyperterror/Project-defense --skill project-defense-skill --agent codex
 
 #    Install to all detected agents at once:
-npx skills add <owner>/project-defense --all
+npx skills add Hyperterror/Project-defense --all
 
 #    Install globally (available across all your projects) instead of per-project:
-npx skills add <owner>/project-defense -g
+npx skills add Hyperterror/Project-defense -g
 
 # 2. Open your project in the agent and invoke the skill
 #    "Run the project-defense skill on this repository"
@@ -67,7 +66,7 @@ npx skills add <owner>/project-defense -g
 #    - After you confirm, generate all artifacts in .project-defense/
 ```
 
-`<owner>/project-defense` is the GitHub `owner/repo` where this skill is
+`Hyperterror/Project-defense` is the GitHub `owner/repo` where this skill is
 published. The skills CLI finds the `SKILL.md` at the repo root and installs
 the skill folder along with its `scripts/`, `templates/`, `rubrics/`, and
 `instructions/`. You do not need to fork — install straight from the public repo.
@@ -297,18 +296,17 @@ Use `npx skills add` — it handles the right directory for every agent automati
 
 ```bash
 # Pin the skill and target a specific agent (non-interactive, CI/CD-friendly)
-npx -y skills add <owner>/project-defense --skill project-defense-skill --agent claude-code
-npx -y skills add <owner>/project-defense --skill project-defense-skill --agent antigravity
-npx -y skills add <owner>/project-defense --skill project-defense-skill --agent codex
-npx -y skills add <owner>/project-defense --skill project-defense-skill --agent cursor
-npx -y skills add <owner>/project-defense --skill project-defense-skill --agent opencode
+npx -y skills add Hyperterror/Project-defense --skill project-defense-skill --agent claude-code
+npx -y skills add Hyperterror/Project-defense --skill project-defense-skill --agent antigravity
+npx -y skills add Hyperterror/Project-defense --skill project-defense-skill --agent codex
+npx -y skills add Hyperterror/Project-defense --skill project-defense-skill --agent cursor
+npx -y skills add Hyperterror/Project-defense --skill project-defense-skill --agent opencode
 
 # All detected agents at once
-npx skills add <owner>/project-defense --all
+npx skills add Hyperterror/Project-defense --all
 ```
 
-`<owner>/project-defense` is the `owner/repo` where this skill is published on
-GitHub. `--skill project-defense-skill` matches the `name` field in this repo's
+`Hyperterror/Project-defense` is the `owner/repo` on GitHub. `--skill project-defense-skill` matches the `name` field in this repo's
 `SKILL.md` frontmatter and selects it explicitly (handy if a repo ever ships
 more than one skill).
 
