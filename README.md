@@ -17,9 +17,14 @@ project-specific interview questions, and runs a scored mock interview.
 5. **Generates 3 documents** — architecture overview, data flow, core logic
 6. **Emits 3 Mermaid diagrams** — architecture, data flow, user flow (text, versionable)
 7. **Creates a learning path** — 10 stages mapped to *your* project's actual features
-8. **Builds a question bank** — explanation, failure scenarios, trade-offs, coding tasks
-9. **Runs a mock interview** — 7 segments, scored against rubrics
+8. **Builds a question bank** — explanation, failure scenarios, trade-offs, coding tasks, each linked to a machine-readable rubric
+9. **Runs a mock interview** — 7 segments, scored against rubrics (0–3 per concept)
 10. **Produces a readiness report** — score, strengths, gaps, prioritized next steps with file references
+
+It also has two interactive coaching modes that build on the analyzed graph:
+
+- **Practice Mode** — generates a coding challenge from your graph (function reconstruction, bug fix, or test writing), sets up an isolated workspace with starter files, coaches you with progressive hints, and runs manifest checks against your solution. Your original files are never modified.
+- **Assessment Mode** — runs a structured assessment against the question bank, records every Q&A in a session file, scores each answer against its rubric, and produces a weighted overall score. Strict mode gives no hints; guided mode offers rubric hints when your score is low.
 
 ---
 
@@ -61,13 +66,6 @@ of the workflow against the extracted copy.
 
 **v1 limits:** public repos only, no private-repo token support yet.
 
-# 3. The agent will:
-#    - Run scripts/scan_repository.py
-#    - Build .project-defense/project-graph.json
-#    - Present the verification report (Phase 4)
-#    - After you confirm, generate all artifacts in .project-defense/
-```
-
 ### Kiro Note
 Kiro uses **steering files** (`.kiro/steering/`) rather than a SKILL.md format.
 Copy the `instructions/` folder contents into `.kiro/steering/` and reference
@@ -98,7 +96,11 @@ All outputs go in `.project-defense/` at your repository root:
 ```
 .project-defense/
 ├── scan-facts.json           # Raw scanner output
+├── code-facts.json           # Raw detector output (routes, components, models, auth)
+├── corrections.json          # User confirmations/corrections from the verification loop
 ├── project-graph.json        # Validated against templates/project-graph.schema.json
+├── question-bank.json        # Machine-readable question bank (4 categories)
+├── question-bank.md          # Human-readable question bank
 ├── docs/
 │   ├── architecture-overview.md
 │   ├── data-flow.md
@@ -107,10 +109,21 @@ All outputs go in `.project-defense/` at your repository root:
 │   ├── architecture.mmd      # Mermaid source (renders in GitHub, Notion, Obsidian...)
 │   ├── data-flow.mmd
 │   └── user-flow.mmd
+├── challenges/
+│   └── <challenge-id>/
+│       ├── manifest.json     # Challenge definition (validated against challenge.schema.json)
+│       ├── starter/          # Starter files (TODO stubs / seeded bugs / test skeletons)
+│       ├── workspace/        # Isolated copy of allowed files for you to edit
+│       ├── workspace.json    # Workspace metadata
+│       └── result.json       # check run results (PASSED/FAILED/NOT_RUN/INFRASTRUCTURE_ERROR)
+├── sessions/
+│   ├── <session-id>.json     # Assessment/interview session (Q&A, scores)
+│   └── <session-id>-score.json  # Weighted score report
 ├── learning-path.md
-├── question-bank.md
 └── readiness-report.md
 ```
+
+Rubric files live in `rubrics/` at the skill root and are referenced by the question bank via `rubric_id`.
 
 ---
 
@@ -150,16 +163,37 @@ project-defense-skill/
 ├── scripts/
 │   ├── scan_repository.py             # Repo scanner (stdlib, Python 3.8+)
 │   ├── detect_code_facts.py           # Stack-specific code detectors (routes, components, models...)
-│   ├── build_graph.py                 # Merges scan + code-facts into schema-valid project-graph.json
+│   ├── build_graph.py                 # Merges scan + code-facts into schema-valid project-graph.json (+ session_identity)
 │   ├── validate_graph.py              # JSON Schema validator for project-graph.json
-│   └── fetch_repository.py            # Fetch a public GitHub repo to a temp dir (stdlib)
+│   ├── fetch_repository.py            # Fetch a public GitHub repo to a temp dir (stdlib)
+│   ├── save_corrections.py            # Read/write .project-defense/corrections.json
+│   ├── score_report.py                # Weighted scoring of a session against the 6-category rubric weights
+│   ├── validate_mermaid.py            # Structural validator for .mmd diagram files
+│   ├── generate_challenge.py           # Create a challenge manifest + starter files from the project graph
+│   ├── prepare_workspace.py           # Copy allowed starter files into an isolated workspace/
+│   ├── run_checks.py                  # Run manifest checks in the workspace (security allow-list + 30s timeout)
+│   ├── save_progress.py               # Create/update/load/list assessment session files
+│   ├── generate_question_bank.py      # Generate a 4-category question bank from the graph (JSON + MD)
+│   └── assess.py                      # Orchestrate assessment sessions (start / answer / finish)
 ├── templates/
 │   ├── project-graph.schema.json      # JSON Schema for the project graph
+│   ├── rubric.schema.json             # JSON Schema for rubric files
+│   ├── challenge.schema.json          # JSON Schema for challenge manifests
+│   ├── assessment-result.schema.json  # JSON Schema for session files
 │   ├── architecture-document.md       # Template for docs/architecture-overview.md
 │   ├── data-flow-document.md          # Template for docs/data-flow.md
 │   └── core-logic-document.md         # Template for docs/core-logic.md
+├── rubrics/                           # Machine-readable scoring rubrics (validated against rubric.schema.json)
+│   ├── explanation-auth-v1.json
+│   ├── failure-scenario-db-v1.json
+│   └── trade-off-stack-v1.json
 ├── tests/
-│   └── test_skill.py                  # 25 unit tests (run: python3 tests/test_skill.py)
+│   ├── test_skill.py                  # Core detector/validator/build tests
+│   ├── test_scoring.py                # score_report.py tests
+│   ├── test_challenge_gen.py          # generate_challenge.py tests
+│   ├── test_workspace.py              # prepare_workspace.py + run_checks.py tests
+│   ├── test_assess.py                 # generate_question_bank.py + assess.py tests
+│   └── test_progress.py               # save_progress.py tests
 ├── examples/                          # Worked-example projects for detector testing
 │   ├── README.md
 │   ├── example-todo-app/              # React + Express + MongoDB (full detection)
@@ -174,6 +208,9 @@ project-defense-skill/
 ├── CONTRIBUTING.md
 ├── SECURITY.md
 └── LICENSE
+```
+
+Run the full suite with `python3 -m unittest discover -s tests -p "test_*.py"` (67 tests).
 
 ---
 
@@ -264,6 +301,9 @@ Then restart your agent session so it discovers the skill.
 - [x] Foundation: SKILL.md, verification loop, React/Express/MongoDB
 - [x] Documentation + Mermaid diagrams
 - [x] Learning path + question bank + mock interview + readiness report
+- [x] Machine-readable rubrics + weighted scoring (score_report.py)
+- [x] Practice Mode (challenges, isolated workspace, progressive hints, manifest checks)
+- [x] Assessment Mode (session tracking, strict/guided modes, question bank, scoring)
 - [ ] Second stack (Next.js/Supabase)
 - [ ] Example projects + sample outputs
 - [ ] Public release + feedback collection
