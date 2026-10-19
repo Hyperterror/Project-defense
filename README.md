@@ -30,17 +30,31 @@ It also has two interactive coaching modes that build on the analyzed graph:
 
 ## Quick Start
 
+The fastest way to install this skill into your AI coding agent is with the
+[skills CLI](https://github.com/antfu/skills-cli) (the open agent-skills
+package manager). It auto-detects your agent's skills directory and symlinks
+the skill folder — no manual `cp` needed.
+
 ```bash
-# 1. Clone or copy this skill folder into your agent's skill directory
-#    Examples:
-#    ~/.claude/skills/project-defense-skill/          (Claude Code)
-#    ~/.agents/skills/project-defense-skill/          (Codex CLI)
-#    ~/.gemini/config/skills/project-defense-skill/   (Antigravity)
-#    .kiro/steering/project-defense-skill/            (Kiro - see note below)
+# 1. Install the skill (interactively pick which agent(s) to target)
+npx skills add <your-github-user>/Project-defense
+
+#    Or target a specific agent directly:
+npx skills add <your-github-user>/Project-defense -a claude-code
+npx skills add <your-github-user>/Project-defense -a antigravity
+npx skills add <your-github-user>/Project-defense -a codex
+
+#    Install to all detected agents at once:
+npx skills add <your-github-user>/Project-defense --all
+
+#    Install globally (available across all your projects) instead of per-project:
+npx skills add <your-github-user>/Project-defense -g
 
 # 2. Open your project in the agent and invoke the skill
 #    "Run the project-defense skill on this repository"
-#    or explicitly: "$project-defense-skill" (Codex), "/project-defense-skill" (Claude)
+#    or trigger it naturally: "understand my project", "audit this repo",
+#    "prepare me to explain this project in an interview", "give me a challenge",
+#    "assess me", "run a mock technical interview on my project"
 
 # 3. The agent will:
 #    - Run scripts/scan_repository.py
@@ -49,6 +63,10 @@ It also has two interactive coaching modes that build on the analyzed graph:
 #    - Present the verification report (Phase 4)
 #    - After you confirm, generate all artifacts in .project-defense/
 ```
+
+Replace `<your-github-user>` with the GitHub owner of your fork. The skills
+CLI finds the `SKILL.md` at the repo root and installs the skill folder along
+with its `scripts/`, `templates/`, `rubrics/`, and `instructions/`.
 
 ### Use with a GitHub URL
 
@@ -65,12 +83,6 @@ the agent chat, it will call `fetch_repository.py` first, then run the rest
 of the workflow against the extracted copy.
 
 **v1 limits:** public repos only, no private-repo token support yet.
-
-### Kiro Note
-Kiro uses **steering files** (`.kiro/steering/`) rather than a SKILL.md format.
-Copy the `instructions/` folder contents into `.kiro/steering/` and reference
-them from a master steering file. The Python scanner still works — run it
-manually: `python3 /path/to/skill/scripts/scan_repository.py .`
 
 ---
 
@@ -277,22 +289,49 @@ if that fails, redirects to /login."
 
 ## Installation by Agent
 
-| Agent | Skill Directory | Invoke |
-|-------|-----------------|--------|
-| Claude Code | `~/.claude/skills/project-defense-skill/` | "Run project-defense skill" |
-| Codex CLI | `~/.agents/skills/project-defense-skill/` | `$project-defense-skill` |
-| Antigravity | `~/.gemini/config/skills/project-defense-skill/` | Via Customizations → Skills |
-| Kiro | `.kiro/steering/` (copy instructions/) | Reference in steering file |
-| Cursor | `.cursor/skills/project-defense-skill/` | `@project-defense-skill` |
+Use `npx skills add` — it handles the right directory for every agent automatically.
 
-**One-liner to install (adjust target dir):**
 ```bash
-cp -r /path/to/this/skill ~/.agents/skills/project-defense-skill
-# or for Codex's new location:
-cp -r /path/to/this/skill ~/.codex/skills/project-defense-skill
+# Specific agent
+npx skills add <your-github-user>/Project-defense -a claude-code
+npx skills add <your-github-user>/Project-defense -a antigravity
+npx skills add <your-github-user>/Project-defense -a codex
+npx skills add <your-github-user>/Project-defense -a cursor
+npx skills add <your-github-user>/Project-defense -a opencode
+
+# All detected agents at once
+npx skills add <your-github-user>/Project-defense --all
 ```
 
-Then restart your agent session so it discovers the skill.
+The CLI supports 30+ agents and lets you choose between a **symlink** (single
+source of truth, easy updates) or a **copy** (useful when symlinks aren't
+supported). Agent-directory mappings are maintained in the skills CLI itself,
+so they stay correct as agents evolve — you don't have to update this repo to
+track them.
+
+**Updating later:**
+```bash
+npx skills check      # see if a newer version is available
+npx skills update     # pull the latest
+```
+
+**Removing:**
+```bash
+npx skills remove project-defense-skill
+```
+
+### Kiro
+
+Kiro uses steering files instead of `SKILL.md`. The `npx skills add` flow
+will install the files, but you need one extra step: copy the `instructions/`
+folder contents into `.kiro/steering/` and reference them from a top-level
+steering file so Kiro loads the workflow context automatically.
+
+The Python scripts work without any agent config — run them directly:
+```bash
+python3 /path/to/skill/scripts/scan_repository.py .
+```
+Then ask Kiro to continue from the scan output.
 
 ---
 
