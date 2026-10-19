@@ -7,6 +7,10 @@
   "required": ["project", "frontend", "backend", "data", "auth", "user_flows", "data_flows", "risks", "uncertainties"],
   "additionalProperties": false,
   "properties": {
+    "session_identity": {
+      "type": "string",
+      "description": "SHA-256 hex digest identifying this repo+remote+commit combination."
+    },
     "project": {
       "type": "object",
       "required": ["name", "purpose", "stack", "entry_points"],

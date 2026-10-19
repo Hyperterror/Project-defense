@@ -1,0 +1,37 @@
+{
+  "id": "failure-scenario-db-v1",
+  "question_id": "q-f001",
+  "expected_concepts": [
+    "crash-vs-retry",
+    "graceful-degradation",
+    "health-check",
+    "alerting"
+  ],
+  "scoring_levels": {
+    "crash-vs-retry": {
+      "0": "Does not distinguish between crashing and retrying.",
+      "1": "Mentions the app might crash but cannot explain retry logic.",
+      "2": "Explains that the app should catch the connection error and retry with backoff.",
+      "3": "Describes exponential backoff, max-retry limits, and the difference between startup failure and runtime disconnection."
+    },
+    "graceful-degradation": {
+      "0": "Does not mention serving users while the database is down.",
+      "1": "Mentions returning an error to the user but does not distinguish cached vs live data.",
+      "2": "Describes returning a 503 Service Unavailable or falling back to a cache.",
+      "3": "Explains circuit-breaker pattern, read-only mode, or cache fallback with TTL and how clients should handle 503."
+    },
+    "health-check": {
+      "0": "Does not mention health checks.",
+      "1": "Mentions a /health endpoint exists but cannot describe what it checks.",
+      "2": "Describes a /health endpoint that pings the database and returns 200/503 accordingly.",
+      "3": "Explains readiness vs liveness probes, what Kubernetes or load balancers do with health check failures, and how to avoid cascading failures."
+    },
+    "alerting": {
+      "0": "Does not mention alerting or monitoring.",
+      "1": "Mentions that logs would show the error.",
+      "2": "Describes logging the error and sending an alert (e.g., Slack, PagerDuty).",
+      "3": "Describes structured logging, error rate metrics, alert thresholds, on-call rotation, and runbooks."
+    }
+  },
+  "max_score": 12
+}

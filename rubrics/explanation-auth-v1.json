@@ -1,0 +1,37 @@
+{
+  "id": "explanation-auth-v1",
+  "question_id": "q-e001",
+  "expected_concepts": [
+    "request-lifecycle",
+    "jwt-generation",
+    "bcrypt-comparison",
+    "error-handling"
+  ],
+  "scoring_levels": {
+    "request-lifecycle": {
+      "0": "Does not describe how the request reaches the backend.",
+      "1": "Mentions that a POST request is sent but omits routing or middleware.",
+      "2": "Describes the full request path: form submit -> fetch/axios -> route handler.",
+      "3": "Explains the complete lifecycle including Content-Type headers, body parsing middleware, and the route match."
+    },
+    "jwt-generation": {
+      "0": "Does not mention JWT or token creation.",
+      "1": "Knows a token is returned but cannot explain how it is created.",
+      "2": "Explains jwt.sign() with payload and secret.",
+      "3": "Explains jwt.sign() with payload, secret, expiry, and where/how the client stores the token."
+    },
+    "bcrypt-comparison": {
+      "0": "Does not mention password verification.",
+      "1": "Knows bcrypt is used but cannot explain the comparison step.",
+      "2": "Describes bcrypt.compare(plain, hash) and that it is async.",
+      "3": "Explains bcrypt.compare(), why timing-safe comparison matters, and what happens on mismatch (401 vs 403)."
+    },
+    "error-handling": {
+      "0": "Does not mention any error handling.",
+      "1": "Mentions that errors return a 4xx status but cannot describe what triggers each.",
+      "2": "Describes at least two error cases (wrong password, user not found) with correct status codes.",
+      "3": "Describes all error cases, correct status codes, avoids leaking which field is wrong, and mentions catch blocks or try/catch pattern."
+    }
+  },
+  "max_score": 12
+}

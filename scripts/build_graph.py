@@ -26,8 +26,10 @@ Usage:
   python3 build_graph.py <repo-root> --pretty         # pretty-print (default)
 """
 
+import hashlib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -340,8 +342,41 @@ def build_uncertainties(code: Dict[str, Any], scan: Dict[str, Any]) -> List[Dict
 # ----------------------------------------------------------------------
 
 
+def _compute_session_identity(repo_root: Path) -> str:
+    """Compute SHA-256 of (abs_repo_root + '|' + git_remote_url + '|' + git_head_hash).
+    Falls back to '' for git_remote_url and git_head_hash when git is unavailable.
+    """
+    abs_root = str(repo_root.resolve())
+
+    # Get git remote URL
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(repo_root), "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=5
+        )
+        git_remote = r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        git_remote = ""
+
+    # Get HEAD commit hash
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=5
+        )
+        git_head = r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        git_head = ""
+
+    raw = abs_root + "|" + git_remote + "|" + git_head
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def build_graph(repo_root: Path, scan: Dict[str, Any], code: Dict[str, Any]) -> Dict[str, Any]:
     repo_root = repo_root.resolve()
+
+    # Compute session identity at the top so it's available to all callers.
+    session_identity = _compute_session_identity(repo_root)
 
     project = build_project(scan, repo_root)
     frontend = build_frontend(code)
@@ -354,6 +389,7 @@ def build_graph(repo_root: Path, scan: Dict[str, Any], code: Dict[str, Any]) -> 
     uncertainties = build_uncertainties(code, scan)
 
     return {
+        "session_identity": session_identity,
         "project": project,
         "frontend": frontend,
         "backend": backend,

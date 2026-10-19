@@ -1,0 +1,111 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://project-defense-coach/schemas/assessment-result.schema.json",
+  "title": "Assessment Session",
+  "description": "Schema for assessment session files written by save_progress.py.",
+  "type": "object",
+  "required": [
+    "session_id",
+    "session_identity",
+    "created_at",
+    "updated_at",
+    "mode",
+    "status",
+    "questions",
+    "coding_results"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique session ID, format: sess-<8-char-sha256>."
+    },
+    "session_identity": {
+      "type": "string",
+      "description": "SHA-256 of the repository identity (from project-graph.json)."
+    },
+    "created_at": {
+      "type": "string",
+      "description": "ISO-8601 timestamp of session creation."
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "ISO-8601 timestamp of last update."
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["assessment", "interview", "practice"],
+      "description": "Session mode."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "completed", "abandoned"],
+      "description": "Session lifecycle status."
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["question_id", "rubric_id", "category"],
+        "additionalProperties": false,
+        "properties": {
+          "question_id": { "type": "string" },
+          "rubric_id": { "type": "string" },
+          "answer": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "null" }
+            ]
+          },
+          "scores": {
+            "type": "object",
+            "additionalProperties": { "type": "integer", "minimum": 0, "maximum": 3 }
+          },
+          "category": { "type": "string" }
+        }
+      }
+    },
+    "coding_results": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "summary": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "description": "Populated by score_report.py on completion."
+        }
+      ]
+    },
+    "overall_score": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Overall weighted score (0.0-1.0), present after scoring."
+    },
+    "categories": {
+      "type": "object",
+      "description": "Per-category scoring breakdown, present after scoring."
+    },
+    "strengths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Category names where score >= 0.5."
+    },
+    "gaps": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Category names where score < 0.5."
+    },
+    "generated_at": {
+      "type": "string",
+      "description": "ISO-8601 timestamp of score generation."
+    },
+    "repository_identity": {
+      "type": "string",
+      "description": "Alias for session_identity used in score output."
+    }
+  }
+}

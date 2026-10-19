@@ -1,0 +1,37 @@
+{
+  "id": "trade-off-stack-v1",
+  "question_id": "q-t001",
+  "expected_concepts": [
+    "document-model-fit",
+    "scalability-claims",
+    "acid-tradeoffs",
+    "migration-difficulty"
+  ],
+  "scoring_levels": {
+    "document-model-fit": {
+      "0": "Cannot explain why document storage was chosen.",
+      "1": "Says 'MongoDB is flexible' without connecting it to the data shape.",
+      "2": "Explains that the data is hierarchical or varies per record, making a document model a natural fit.",
+      "3": "Explains the specific data shape (e.g., nested user preferences, variable fields), how embedding vs referencing was decided, and what query patterns drove the choice."
+    },
+    "scalability-claims": {
+      "0": "Cannot describe any scalability properties of MongoDB.",
+      "1": "Says 'MongoDB scales horizontally' without explaining what that means.",
+      "2": "Describes horizontal sharding and replica sets at a high level.",
+      "3": "Explains sharding keys, replica set read preferences, and compares write throughput vs consistency tradeoffs versus a relational database at scale."
+    },
+    "acid-tradeoffs": {
+      "0": "Does not mention ACID properties or transactions.",
+      "1": "Knows MongoDB lacks full ACID but cannot explain the practical impact.",
+      "2": "Explains that multi-document transactions exist since MongoDB 4.0 but have a performance cost.",
+      "3": "Describes atomicity at the document level, when multi-document transactions are needed, their overhead, and specific business scenarios where this tradeoff matters."
+    },
+    "migration-difficulty": {
+      "0": "Does not consider schema migration difficulty.",
+      "1": "Says 'MongoDB has no schema' without explaining what changes when the data shape evolves.",
+      "2": "Describes lazy migration (handling old and new shapes in code) and when that becomes a problem.",
+      "3": "Explains schema versioning strategies, migration scripts, backward compatibility requirements, and how this compares to SQL ALTER TABLE migrations."
+    }
+  },
+  "max_score": 12
+}

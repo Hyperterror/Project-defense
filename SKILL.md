@@ -31,6 +31,25 @@ This skill turns the agent into a project-defense coach: it analyzes the user's 
 - If README and code conflict, the code takes priority — but always flag the conflict.
 - Ask the user before assuming intent, deployment or business rules.
 
+## Resumption
+
+When `.project-defense/project-graph.json` already exists in the target repository, the agent MUST ask the user the following question before doing anything else:
+
+> "A project graph already exists for this repository. What would you like to do?
+> (a) Re-analyze from scratch — delete the existing graph and re-run Phases 1–4
+> (b) Resume from the existing graph — skip Phases 1–3, go straight to Phase 4 verification
+> (c) Go directly to Practice Mode
+> (d) Go directly to Assessment Mode
+> (e) Go directly to Interview Mode"
+
+The agent must NOT silently re-run analysis or overwrite an existing graph. Wait for the user to choose before proceeding.
+
+- Option (a): delete `.project-defense/project-graph.json` and run the full pipeline from Phase 1.
+- Option (b): load the existing graph, skip Phases 1–3, and start Phase 4 (verification loop).
+- Option (c): enter Practice Mode directly (see "Practice Mode" section below).
+- Option (d): enter Assessment Mode directly (see "Assessment Mode" section below).
+- Option (e): enter Interview Mode — skip to Phase 9 (Mock Interview) using the existing graph.
+
 ## The Workflow
 1. Repository ingestion — read the file tree, detect the stack, record baseline facts.
 2. Static analysis — run scripts/scan_repository.py to extract routes, models, and structure.
@@ -46,6 +65,44 @@ This skill turns the agent into a project-defense coach: it analyzes the user's 
 Phases 1-4 live in instructions/01-analyze-and-verify.md.
 Phases 5-10 live in instructions/02-generate-docs.md.
 Full phase mechanics for every phase live in instructions/00-workflow.md.
+
+## Practice Mode
+
+Enter Practice Mode when the user says "give me a challenge", "practice", or "coding exercise".
+
+**Starting a challenge:**
+1. Call `scripts/generate_challenge.py <repo_path> --feature <feature> --type <type> --difficulty <level>` to create a challenge manifest and starter files under `.project-defense/challenges/<challenge-id>/`.
+2. Call `scripts/prepare_workspace.py <repo_path> --challenge <challenge-id>` to populate the workspace directory with only the allowed starter files.
+3. Present the challenge to the user: show the objective, where the starter files are, and the acceptance criteria.
+
+**Coaching loop:**
+- Answer questions and give guidance without revealing the full solution.
+- Hints are progressive (level 1 → 4). Only reveal the next hint when the user explicitly asks for one.
+- Each hint request counts as one attempt toward the `hint_policy.reveal_after_attempts` threshold in the manifest.
+
+**Checking work:**
+- When the user says "check my work" or "done", call `scripts/run_checks.py <repo_path> --challenge <challenge-id>`.
+- Report results clearly: which checks passed, which failed, and what the next step is.
+- Original repository files are NEVER modified by any of these scripts.
+
+## Assessment Mode
+
+Enter Assessment Mode when the user says "assess me", "start assessment", or "test me without hints".
+
+**Starting an assessment:**
+1. Call `scripts/assess.py <repo_path> start [--mode strict|guided]` to create a session and get the first question.
+2. Present the question to the user; wait for their answer.
+
+**Answering questions:**
+- For each answer, call `scripts/assess.py <repo_path> answer <session-id> <question-id> "<answer-text>"`.
+- In **strict** mode: no hints are given. Questions proceed in fixed order.
+- In **guided** mode: after each answer, if the score for that question is below 2/3, the agent offers the next rubric hint before advancing.
+- For coding questions, `assess.py` internally calls `run_checks.py` to verify the implementation.
+
+**Finishing:**
+- When all questions are answered, call `scripts/assess.py <repo_path> finish <session-id>`.
+- Report the overall score, strengths, and gaps to the user.
+- The full score JSON is written to `.project-defense/sessions/<session-id>-score.json`.
 
 ## Artifacts
 All outputs go in a `.project-defense/` folder at the analyzed repository's root:

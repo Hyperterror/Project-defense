@@ -240,6 +240,44 @@ chat.
 1=partial, 2=correct, 3=thorough). Segment weights: deep dive 25%, coding 25%,
 architecture 20%, failures 15%, trade-offs 10%, overview 5%, reflection 10%.
 
+**Rubric-driven scoring (machine-readable):**
+The agent loads rubric files from the `rubrics/` directory that match the
+question being asked. Matching is done by `rubric_id` — each question in the
+question bank carries a `rubric_id` that points to a file in `rubrics/`
+(e.g. `rubrics/explanation-auth-v1.json`).
+
+For each rubric concept, the agent scores the user's answer 0-3 using the
+`scoring_levels` descriptions in the rubric file:
+- 0 = missing (description in rubric `scoring_levels.<concept>["0"]`)
+- 1 = partial (description in rubric `scoring_levels.<concept>["1"]`)
+- 2 = correct (description in rubric `scoring_levels.<concept>["2"]`)
+- 3 = thorough (description in rubric `scoring_levels.<concept>["3"]`)
+
+**Recording Q&A exchanges:**
+After each answer, the agent writes the Q&A pair to the session JSON file at
+`.project-defense/sessions/<session-id>.json` via `save_progress.py update`:
+```json
+{
+  "question_id": "q-e001",
+  "question_text": "Walk me through the login flow.",
+  "answer_text": "The user submits the form...",
+  "rubric_id": "explanation-auth-v1",
+  "timestamp": "2024-01-01T00:00:00+00:00"
+}
+```
+
+**On interview completion:**
+The agent calls `score_report.py` (or `assess.py finish <session-id>`) on the
+session file to produce the final score. The score JSON written to
+`.project-defense/sessions/<session-id>-score.json` is the authoritative
+output. It contains `overall_score` (0.0-1.0), per-category `categories`
+breakdown, `strengths`, and `gaps`.
+
+**Populating the readiness report:**
+The agent uses the resulting score JSON to populate the Phase 10 readiness
+report — pulling `overall_score`, `strengths`, `gaps`, and per-category
+`categories` directly from the score file rather than recomputing them.
+
 **Output:** scores recorded in `.project-defense/readiness-report.md` (Phase 10).
 
 ---
