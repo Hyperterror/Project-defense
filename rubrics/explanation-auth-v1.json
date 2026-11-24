@@ -33,5 +33,18 @@
       "3": "Describes all error cases, correct status codes, avoids leaking which field is wrong, and mentions catch blocks or try/catch pattern."
     }
   },
-  "max_score": 12
+  "max_score": 12,
+  "hints": [
+    "Start at the form submit and name each hop until the response.",
+    "Which call creates the token, and what is in its payload?",
+    "How is the submitted password compared to the stored hash?"
+  ],
+  "topic": [
+    "login",
+    "auth",
+    "jwt",
+    "password",
+    "token",
+    "register"
+  ]
 }

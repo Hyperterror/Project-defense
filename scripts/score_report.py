@@ -113,7 +113,11 @@ def compute_scores(session: dict) -> dict:
     questions = session.get("questions", [])
 
     # Accumulate per-category scores
-    category_totals: dict = {cat: {"total": 0.0, "count": 0, "passed": [], "failed": []} for cat in CATEGORY_WEIGHTS}
+    category_totals: dict = {
+        cat: {"total": 0.0, "count": 0, "passed": [], "failed": [],
+              "unscored": [], "heuristic": 0}
+        for cat in CATEGORY_WEIGHTS
+    }
 
     for q in questions:
         raw_cat = q.get("category", "")
@@ -124,12 +128,14 @@ def compute_scores(session: dict) -> dict:
 
         scores_map = q.get("scores", {})
         if not scores_map:
-            # Question has no scores recorded — treat as 0 for every concept
-            # Only count it if it has an answer (unanswered questions are skipped)
+            # Nothing to score: this question had no rubric, so the answer was
+            # never graded. Counting it as 0 would punish the candidate for a
+            # gap in the question bank rather than a gap in understanding.
+            # Record it so the report can show how much of the session was
+            # actually graded.
+            q_id = q.get("question_id", "")
             if q.get("answer") is not None:
-                category_totals[cat]["total"] += 0.0
-                category_totals[cat]["count"] += 1
-                category_totals[cat]["failed"].append(q.get("question_id", ""))
+                category_totals[cat]["unscored"].append(q_id)
             continue
 
         # Average over all scored concepts
@@ -139,6 +145,10 @@ def compute_scores(session: dict) -> dict:
 
         category_totals[cat]["total"] += normalized
         category_totals[cat]["count"] += 1
+        if q.get("scored_by") == "heuristic":
+            # Scores produced by assess.py's keyword fallback are weaker than
+            # an agent reading the rubric; surface how many there were.
+            category_totals[cat]["heuristic"] += 1
 
         q_id = q.get("question_id", "")
         if normalized >= 0.5:
@@ -164,6 +174,9 @@ def compute_scores(session: dict) -> dict:
             "weight": weight,
             "passed": data["passed"],
             "failed": data["failed"],
+            "scored_count": data["count"],
+            "heuristic_scored": data["heuristic"],
+            "unscored": data["unscored"],
         }
 
         overall += cat_score * weight

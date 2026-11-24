@@ -23,6 +23,14 @@ analyze (NOT on the skill folder itself). It outputs
 - repo_root, folder_structure, languages, dependency_manifests
 - readme_path, test_dirs, test_frameworks, config_files
 - entry_points, env_vars, run_commands
+- ignore_patterns (the rules loaded from `.project-defenseignore`)
+
+The scanner always skips `node_modules`, build output, caches and `.git`, so a
+dependency's manifest can never shape the detected stack.
+
+**If the user has generated or vendored code**, ask them to add a
+`.project-defenseignore` at the repo root (gitignore syntax, `!` to re-include).
+Both the scanner and the detector honour it.
 
 **If the script fails or misses things:**
 - Read package.json / requirements.txt / pyproject.toml manually.
@@ -105,6 +113,16 @@ yourself.
 **Validate:** `python3 scripts/validate_graph.py .project-defense/project-graph.json templates/project-graph.schema.json`
 (must exit 0). Fix any reported `path: reason` errors before moving to Phase 4.
 
+**Record freshness:** run `python3 scripts/check_graph_freshness.py <repo-root>`.
+The graph stores `analyzed_at`, `git_head` and a `content_fingerprint`, so this
+tells you (and the user) whether the analysis is still current. Exit 0 = fresh,
+exit 1 = stale.
+
+**Build the edge list:** `build_graph.py` also writes `relationships` — who
+imports whom, which files have tests, and which middleware guards which route
+prefix. Use those edges instead of guessing when you answer or ask "what breaks
+if this were deleted?".
+
 ---
 
 ## Phase 4: Verification Loop
@@ -129,6 +147,37 @@ List each "UNVERIFIED" entry as a specific question:
 
 **For each item, ask the user:** "Confirm? Correct? Don't know?"
 
+### Ask in rounds, not one at a time
+
+Label every uncertain item as either a **fact** or a **decision**.
+
+- **Facts** are your job: whether a middleware exists, which library hashes the
+  password, whether a test file covers a route. Go read the code and answer it
+  yourself. Never spend a user round-trip on something the repository can
+  answer.
+- **Decisions** are the user's: intent, deployment reality, business rules,
+  what is out of scope for the project. These go to them.
+
+Ask every *independent* decision in **one round**, numbered, each with the
+answer you would bet on. Keep a question out of the round if its answer depends
+on another question still open in that round — it belongs to the next round.
+
+```
+**Q1** — Session storage: the code signs a JWT but no refresh path exists.
+ Is refresh deliberately out of scope, or is it handled by a proxy you don't own?
+➡️ My guess: out of scope for v1, tokens last 7 days.
+
+**Q2** — Route `POST /api/users` has no visible validation.
+ Is it validated upstream, or genuinely missing?
+➡️ My guess: genuinely missing (a known gap you'd mention as such).
+```
+
+Word each question so that "yes" accepts your guess. One round per set of
+independent decisions; recompute the next round from the answers.
+
+The loop ends when every uncertain item is resolved or explicitly deferred as
+UNVERIFIED — not when the user gets tired.
+
 **Update the graph:**
 - Confirm → keep "code-verified"
 - Correct → change to "user-provided", add user's note to evidence
@@ -146,6 +195,7 @@ confirmed the understanding report.
 - [ ] scan-facts.json exists and is complete
 - [ ] All stack-specific detectors run (React, Express, MongoDB, Auth)
 - [ ] project-graph.json validates against schema
+- [ ] `check_graph_freshness.py` reports the graph matches HEAD
 - [ ] Every graph entry has evidence with file, lines, excerpt, status
 - [ ] Verification report presented in 3 sections (Verified, Uncertain, Conflicts)
 - [ ] User has confirmed/corrected every item

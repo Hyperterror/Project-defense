@@ -15,7 +15,25 @@
     "question_id": {
       "type": "string",
       "minLength": 1,
-      "description": "Links this rubric to a question in the question bank."
+      "description": "Links this rubric to a question in the question bank. Generic (category-level) rubrics may use a stable placeholder such as 'generic'."
+    },
+    "category": {
+      "type": "string",
+      "enum": ["explanation", "failure_scenario", "trade_off", "coding_task"],
+      "description": "When set, this rubric is the fallback for every question in that category that has no applicable question-specific rubric."
+    },
+    "topic": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Keywords that must appear in the question text for a question-specific rubric to apply. When they do not, the category fallback is used instead."
+    },
+    "hints": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Progressive hints revealed in guided mode when an answer scores below 2."
     },
     "expected_concepts": {
       "type": "array",

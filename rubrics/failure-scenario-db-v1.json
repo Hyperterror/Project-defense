@@ -33,5 +33,18 @@
       "3": "Describes structured logging, error rate metrics, alert thresholds, on-call rotation, and runbooks."
     }
   },
-  "max_score": 12
+  "max_score": 12,
+  "hints": [
+    "Name what happens on the exact line that queries the database.",
+    "Does the app retry, fail fast, or degrade?",
+    "What does the user see while the database is down?"
+  ],
+  "topic": [
+    "database",
+    "mongo",
+    "db",
+    "connection",
+    "query",
+    "unreachable"
+  ]
 }

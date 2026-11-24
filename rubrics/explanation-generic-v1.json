@@ -1,0 +1,43 @@
+{
+  "id": "explanation-generic-v1",
+  "question_id": "generic",
+  "category": "explanation",
+  "expected_concepts": [
+    "component-responsibility",
+    "data-flow",
+    "architecture-fit",
+    "evidence"
+  ],
+  "scoring_levels": {
+    "component-responsibility": {
+      "0": "Does not say what the component is responsible for, or describes a different component.",
+      "1": "Names the component but the responsibility is vague (for example 'it handles the logic').",
+      "2": "States the component's single responsibility and what it does not do.",
+      "3": "States the responsibility, names its inputs and outputs, and contrasts it with the neighbouring components."
+    },
+    "data-flow": {
+      "0": "No description of how data enters, moves through, or leaves the component.",
+      "1": "Mentions that data is fetched or passed but skips at least one layer.",
+      "2": "Describes the path from trigger to result, including the layer that produces the data.",
+      "3": "Describes the full path with payload shapes and error/empty cases at each hop."
+    },
+    "architecture-fit": {
+      "0": "Does not connect the component to the rest of the system.",
+      "1": "Says it 'is used by the app' without naming callers or callees.",
+      "2": "Names the callers and callees and the direction of the dependency.",
+      "3": "Explains why the component sits at that layer and what would break if it moved."
+    },
+    "evidence": {
+      "0": "No reference to an actual file, function or line.",
+      "1": "Names a file but not the function or line involved.",
+      "2": "Cites the file and the function or line the behaviour lives in.",
+      "3": "Cites precise locations and quotes the specific code that proves the claim."
+    }
+  },
+  "hints": [
+    "Start with one sentence: what would break if this component were deleted?",
+    "Name the caller, the component, and the callee in order.",
+    "Point at a file and line that proves your statement."
+  ],
+  "max_score": 12
+}

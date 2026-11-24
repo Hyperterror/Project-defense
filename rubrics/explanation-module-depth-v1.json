@@ -1,0 +1,49 @@
+{
+  "id": "explanation-module-depth-v1",
+  "question_id": "generic",
+  "category": "explanation",
+  "topic": [
+    "deleted",
+    "delete",
+    "pass-through",
+    "module"
+  ],
+  "expected_concepts": [
+    "call sites",
+    "reimplementation cost",
+    "interface surface",
+    "depth verdict"
+  ],
+  "scoring_levels": {
+    "call sites": {
+      "0": "Cannot name anything that depends on the module.",
+      "1": "Names one caller or one feature that would break, without a file reference.",
+      "2": "Names the main callers and the features that would break, citing files from the graph.",
+      "3": "Enumerates every caller, distinguishes runtime breakage from test breakage, and identifies behaviour that would silently change rather than fail."
+    },
+    "reimplementation cost": {
+      "0": "Says the code would simply disappear.",
+      "1": "Mentions that the logic would have to move, without saying where or how much.",
+      "2": "Explains that the behaviour would have to be reimplemented at several call sites, and estimates the spread.",
+      "3": "Shows that deleting the module would duplicate the same logic across N callers (the deletion test), and names which invariant would be hardest to preserve."
+    },
+    "interface surface": {
+      "0": "Confuses the module's public surface with its internals, or names neither.",
+      "1": "Describes what the module exposes, but not what it hides.",
+      "2": "Separates the exposed interface (signature, invariants, error modes) from the hidden implementation.",
+      "3": "States exactly what a caller must know to use it correctly, including ordering constraints, error modes and configuration, and which complexity is deliberately hidden."
+    },
+    "depth verdict": {
+      "0": "No judgement about the module's shape.",
+      "1": "Calls it 'simple' or 'complex' without tying that to leverage for callers.",
+      "2": "Classifies it as deep or pass-through and gives one supporting reason.",
+      "3": "Argues the verdict from leverage and locality (behaviour per unit of interface, and where change concentrates), and says what a better seam placement would be."
+    }
+  },
+  "max_score": 12,
+  "hints": [
+    "Start by listing the call sites: who imports or calls this module today?",
+    "The deletion test asks whether complexity vanishes or reappears across the callers.",
+    "Separate what the module exposes (its interface) from what it hides (its implementation)."
+  ]
+}

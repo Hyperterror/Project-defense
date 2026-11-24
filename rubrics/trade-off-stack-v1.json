@@ -33,5 +33,17 @@
       "3": "Explains schema versioning strategies, migration scripts, backward compatibility requirements, and how this compares to SQL ALTER TABLE migrations."
     }
   },
-  "max_score": 12
+  "max_score": 12,
+  "hints": [
+    "Name the alternative stack you did not choose.",
+    "Which constraint made that alternative impractical here?",
+    "What would have to change in the schema to migrate later?"
+  ],
+  "topic": [
+    "stack",
+    "database",
+    "mongodb",
+    "postgres",
+    "mongo"
+  ]
 }

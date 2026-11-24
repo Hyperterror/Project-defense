@@ -24,6 +24,14 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+from path_filters import (  # noqa: E402
+    is_ignored,
+    load_ignore_patterns,
+    walk_files,
+)
+
 
 # ----------------------------------------------------------------------
 # Directories to skip (noise / secrets / dependencies)
@@ -42,7 +50,6 @@ SKIP_DIRS = {
 # File extensions we scan
 JS_EXTS = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 PY_EXTS = {".py"}
-
 
 # ----------------------------------------------------------------------
 # Regex patterns (compiled once)
@@ -113,8 +120,8 @@ RE_PASSWORD = re.compile(r"""\b(password|passwd|pwd)\b""", re.IGNORECASE)
 # ----------------------------------------------------------------------
 
 
-def should_skip(path: Path, root: Path) -> bool:
-    """Skip files in noise/dependency/secret directories."""
+def should_skip(path: Path, root: Path, patterns: Optional[List[str]] = None) -> bool:
+    """Skip files in noise/dependency/secret directories or ignored paths."""
     try:
         rel = path.relative_to(root)
     except ValueError:
@@ -123,6 +130,8 @@ def should_skip(path: Path, root: Path) -> bool:
     for p in parts[:-1]:  # check parent dirs
         if p in SKIP_DIRS or p.startswith("."):
             return True
+    if patterns and is_ignored(rel, patterns):
+        return True
     return False
 
 
@@ -158,6 +167,111 @@ def evidence(file: Path, root: Path, line_no: int, excerpt: str) -> Dict[str, An
         "excerpt": excerpt,
         "status": "code-verified",
     }
+
+
+# ----------------------------------------------------------------------
+# Import graph (file -> file edges)
+# ----------------------------------------------------------------------
+
+# `import x from "y"`, `export * from "y"`, `require("y")`, `import("y")`
+RE_JS_IMPORT = re.compile(
+    r"(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|^\s*import\s+)['\"]([^'\"]+)['\"]",
+    re.M,
+)
+# `from .models import X` / `import server.models`
+RE_PY_IMPORT = re.compile(
+    r"^\s*(?:from\s+([.\w]+)\s+import|import\s+([.\w]+))", re.M
+)
+
+JS_RESOLVE_EXTS = [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".json"]
+PY_RESOLVE_EXTS = [".py"]
+
+
+def _resolve_js_module(spec: str, from_file: Path, root: Path) -> Optional[Path]:
+    """Resolve a relative JS/TS specifier to a file inside the repo."""
+    if not spec.startswith("."):
+        return None  # bare specifier: a dependency, not a project edge
+    base = (from_file.parent / spec).resolve()
+    candidates = [base] + [base.with_name(base.name + ext) for ext in JS_RESOLVE_EXTS]
+    candidates += [base / ("index" + ext) for ext in JS_RESOLVE_EXTS]
+    for candidate in candidates:
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _resolve_py_module(spec: str, from_file: Path, root: Path) -> Optional[Path]:
+    """Resolve a Python `from a.b import c` specifier to a file inside the repo."""
+    if not spec or spec in ("import", "from"):
+        return None
+    if spec.startswith("."):
+        # Relative import: walk up one level per leading dot.
+        depth = len(spec) - len(spec.lstrip("."))
+        base = from_file.parent
+        for _ in range(max(depth - 1, 0)):
+            base = base.parent
+        parts = [p for p in spec.lstrip(".").split(".") if p]
+    else:
+        base = root
+        parts = [p for p in spec.split(".") if p]
+    target = base.joinpath(*parts)
+    for candidate in [target.with_name(target.name + ".py"), target / "__init__.py"]:
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def detect_imports(root: Path, files: List[Path]) -> List[Dict[str, Any]]:
+    """Extract internal file-to-file import edges (stdlib regex, no parser).
+
+    Only edges between files of *this* project are recorded: a bare specifier
+    (`react`, `express`) names a dependency, and counting it would drown the
+    graph in noise. The edges are what make 'what breaks if I delete this?'
+    answerable with evidence instead of guesswork.
+    """
+    edges: List[Dict[str, Any]] = []
+    seen: Set[Tuple[str, str]] = set()
+    for path in files:
+        suffix = path.suffix.lower()
+        text = read_text(path)
+        if not text:
+            continue
+        if suffix in JS_EXTS:
+            pattern, resolver = RE_JS_IMPORT, _resolve_js_module
+        elif suffix in PY_EXTS:
+            pattern, resolver = RE_PY_IMPORT, _resolve_py_module
+        else:
+            continue
+        for match in pattern.finditer(text):
+            spec = (match.group(1) or (match.group(2) if match.re is RE_PY_IMPORT else "") or "")
+            if not spec:
+                continue
+            target = resolver(spec, path, root)
+            if target is None or target == path:
+                continue
+            source_rel = str(path.relative_to(root))
+            target_rel = str(target.relative_to(root))
+            key = (source_rel, target_rel)
+            if key in seen:
+                continue
+            seen.add(key)
+            edges.append({
+                "from": source_rel,
+                "to": target_rel,
+                "spec": spec,
+                "evidence": evidence(
+                    path, root, find_lines(text, match.start()), spec
+                ),
+            })
+    return edges
 
 
 # ----------------------------------------------------------------------
@@ -530,9 +644,56 @@ def detect_auth_signals(root: Path, files: List[Path]) -> Dict[str, Any]:
 # ----------------------------------------------------------------------
 
 
+def detect_test_edges(root: Path, files: List[Path]) -> List[Dict[str, Any]]:
+    """Match test files to the source file they exercise, by naming convention.
+
+    Conventions covered: `x.test.js`, `x.spec.ts`, `test_x.py`, `x_test.py`.
+    Matching is by file stem, which is how the overwhelming majority of
+    projects name tests; anything more clever needs a parser we do not have.
+    """
+    def is_test(path: Path) -> bool:
+        name = path.name.lower()
+        return (
+            ".test." in name or ".spec." in name
+            or name.startswith("test_") or name.endswith("_test.py")
+        )
+
+    def stem_of(path: Path) -> str:
+        name = path.name
+        for marker in (".test.", ".spec."):
+            if marker in name.lower():
+                return name[: name.lower().index(marker)]
+        if name.startswith("test_"):
+            return path.stem[len("test_"):]
+        if name.endswith("_test.py"):
+            return path.stem[: -len("_test")]
+        return path.stem
+
+    sources = {}
+    for path in files:
+        if not is_test(path):
+            sources.setdefault(path.stem, []).append(path)
+
+    edges = []
+    for path in files:
+        if not is_test(path):
+            continue
+        stem = stem_of(path)
+        for source in sources.get(stem, []):
+            edges.append({
+                "source": str(source.relative_to(root)),
+                "test": str(path.relative_to(root)),
+                "evidence": evidence(path, root, 1, path.name),
+            })
+    return edges
+
+
 def detect_all(root: Path) -> Dict[str, Any]:
     root = root.resolve()
-    files = [p for p in root.rglob("*") if p.is_file() and is_source_file(p)]
+    ignore_patterns = load_ignore_patterns(root)
+    # Walk once with the shared filter so the detector and the scanner agree on
+    # which files belong to the project (no node_modules, build output or .git).
+    files = [p for p in walk_files(root, ignore_patterns) if is_source_file(p)]
 
     return {
         "repo_root": str(root),
@@ -553,6 +714,8 @@ def detect_all(root: Path) -> Dict[str, Any]:
         },
         "api_calls": detect_api_calls(root, files),
         "auth": detect_auth_signals(root, files),
+        "imports": detect_imports(root, files),
+        "tests": detect_test_edges(root, files),
     }
 
 

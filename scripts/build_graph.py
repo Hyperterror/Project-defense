@@ -31,8 +31,9 @@ import json
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Local import — works whether the script is run from any cwd
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -342,6 +343,45 @@ def build_uncertainties(code: Dict[str, Any], scan: Dict[str, Any]) -> List[Dict
 # ----------------------------------------------------------------------
 
 
+def _get_git_head(repo_root: Path) -> str:
+    """Return the current HEAD commit hash, or '' when git is unavailable."""
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=5
+        )
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _content_fingerprint(repo_root: Path) -> str:
+    """Hash the project's source files (path, size, mtime) into one digest.
+
+    Recorded so `check_graph_freshness.py` can still detect a stale graph in a
+    repository with no git history, where a commit hash is not available.
+    """
+    try:
+        from path_filters import load_ignore_patterns, walk_files
+        from detect_code_facts import is_source_file
+    except ImportError:
+        return ""
+    digest = hashlib.sha256()
+    try:
+        for path in walk_files(repo_root, load_ignore_patterns(repo_root)):
+            if not is_source_file(path):
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            rel = str(path.relative_to(repo_root)).replace("\\", "/")
+            digest.update(("%s:%d:%d\n" % (rel, stat.st_size, stat.st_mtime_ns)).encode())
+    except Exception:
+        return ""
+    return digest.hexdigest()
+
+
 def _compute_session_identity(repo_root: Path) -> str:
     """Compute SHA-256 of (abs_repo_root + '|' + git_remote_url + '|' + git_head_hash).
     Falls back to '' for git_remote_url and git_head_hash when git is unavailable.
@@ -372,6 +412,64 @@ def _compute_session_identity(repo_root: Path) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def build_relationships(code: Dict[str, Any], backend: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Build the file-level edge list (the 'what breaks if I delete this' map).
+
+    Edge types kept deliberately small:
+      - imports:   file A pulls code from file B (regex-resolved, internal only)
+      - tested_by: file A has a test file B by naming convention
+      - protects:  middleware M guards route path P (from its mount prefix)
+
+    A defense answer about deleting a module is only as good as its list of
+    importers, so these edges are what turn that question from guesswork into
+    evidence.
+    """
+    edges: List[Dict[str, Any]] = []
+    seen: Set[Tuple[str, str, str]] = set()
+
+    def add(edge_type: str, source: str, target: str, evidence: Dict[str, Any]) -> None:
+        key = (edge_type, source, target)
+        if key in seen or not source or not target:
+            return
+        seen.add(key)
+        edges.append({
+            "type": edge_type,
+            "from": source,
+            "to": target,
+            "evidence": {
+                "file": evidence.get("file", source),
+                "lines": evidence.get("lines", [1, 1]),
+                "excerpt": str(evidence.get("excerpt", ""))[:200],
+                "status": evidence.get("status", "code-verified"),
+            },
+        })
+
+    for item in code.get("imports", []) or []:
+        add("imports", item.get("from", ""), item.get("to", ""), item.get("evidence", {}))
+
+    for item in code.get("tests", []) or []:
+        add("tested_by", item.get("source", ""), item.get("test", ""), item.get("evidence", {}))
+
+    # A middleware mounted at a prefix protects every route under that prefix.
+    for middleware in backend.get("middleware", []) or []:
+        prefix = (middleware.get("details", {}) or {}).get("path_prefix")
+        if not prefix:
+            continue
+        for route in backend.get("routes", []) or []:
+            path = route.get("path") or ""
+            if path.startswith(prefix):
+                add(
+                    "protects",
+                    str(middleware.get("name", "")),
+                    path,
+                    middleware.get("evidence", {}) or route.get("evidence", {}),
+                )
+
+    # Deterministic order, and bounded so a huge repo cannot bloat the graph.
+    edges.sort(key=lambda e: (e["type"], e["from"], e["to"]))
+    return edges[:500]
+
+
 def build_graph(repo_root: Path, scan: Dict[str, Any], code: Dict[str, Any]) -> Dict[str, Any]:
     repo_root = repo_root.resolve()
 
@@ -383,6 +481,7 @@ def build_graph(repo_root: Path, scan: Dict[str, Any], code: Dict[str, Any]) -> 
     backend = build_backend(code)
     data = build_data(code)
     auth = build_auth(code, backend["routes"])
+    relationships = build_relationships(code, backend)
     user_flows = build_user_flows(backend["routes"])
     data_flows = build_data_flows(frontend["api_calls"], backend["routes"])
     risks = build_risks(code, scan)
@@ -390,6 +489,9 @@ def build_graph(repo_root: Path, scan: Dict[str, Any], code: Dict[str, Any]) -> 
 
     return {
         "session_identity": session_identity,
+        "analyzed_at": datetime.now(timezone.utc).isoformat(),
+        "git_head": _get_git_head(repo_root),
+        "content_fingerprint": _content_fingerprint(repo_root),
         "project": project,
         "frontend": frontend,
         "backend": backend,
@@ -397,6 +499,7 @@ def build_graph(repo_root: Path, scan: Dict[str, Any], code: Dict[str, Any]) -> 
         "auth": auth,
         "user_flows": user_flows,
         "data_flows": data_flows,
+        "relationships": relationships,
         "risks": risks,
         "uncertainties": uncertainties,
     }

@@ -13,6 +13,17 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+# Local import so the shared filter works from any cwd.
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+from path_filters import (  # noqa: E402
+    is_ignored,
+    is_noise_dir,
+    load_ignore_patterns,
+    walk_files,
+    walk_source_files,
+)
+
 
 # ----------------------------------------------------------------------
 # Configuration
@@ -123,12 +134,13 @@ def find_files(root: Path, patterns: List[str], max_depth: int = 3) -> List[Path
     return sorted(set(results))
 
 
-def count_languages(root: Path) -> Dict[str, int]:
+def count_languages(root: Path, patterns: Optional[List[str]] = None) -> Dict[str, int]:
+    """Count files by language, ignoring dependencies, build output and .git."""
     counts: Dict[str, int] = {}
-    for ext, lang in EXTENSION_TO_LANGUAGE.items():
-        files = list(root.rglob(f"*{ext}"))
-        if files:
-            counts[lang] = len(files)
+    for path in walk_files(root, patterns):
+        lang = EXTENSION_TO_LANGUAGE.get(path.suffix.lower())
+        if lang:
+            counts[lang] = counts.get(lang, 0) + 1
     return dict(sorted(counts.items(), key=lambda x: -x[1]))
 
 
@@ -139,11 +151,13 @@ def get_folder_structure(root: Path, max_depth: int = 2) -> Dict[str, Any]:
         result = {}
         try:
             for item in sorted(dir_path.iterdir()):
-                if item.name.startswith(".") and item.name not in (".github", ".gitlab", ".vscode"):
-                    continue
                 if item.is_dir():
+                    if is_noise_dir(item.name):
+                        continue
                     result[item.name + "/"] = walk(item, depth + 1)
                 else:
+                    if item.name.startswith(".") and item.name not in (".github", ".gitlab", ".vscode"):
+                        continue
                     result[item.name] = "file"
         except PermissionError:
             pass
@@ -263,33 +277,71 @@ def extract_env_vars(content: str) -> List[str]:
     return sorted(vars_found)
 
 
+def _iter_dirs(root: Path, patterns: Optional[List[str]] = None) -> List[Path]:
+    """List non-noise directories under root, honouring ignore patterns."""
+    dirs: List[Path] = []
+    for dirpath, dirnames, _ in os.walk(str(root)):
+        current = Path(dirpath)
+        dirnames[:] = [d for d in sorted(dirnames) if not is_noise_dir(d)]
+        for name in dirnames:
+            full = current / name
+            try:
+                if patterns and is_ignored(full.relative_to(root), patterns):
+                    continue
+            except ValueError:
+                continue
+            dirs.append(full)
+    return dirs
+
+
+def _config_file_matches(rel_posix: str, name: str) -> bool:
+    for pattern in CONFIG_FILES:
+        if "/" in pattern:
+            if rel_posix == pattern or rel_posix.startswith(pattern + "/"):
+                return True
+        elif name == pattern:
+            return True
+    return False
+
+
+def _entry_point_matches(rel_posix: str) -> bool:
+    for pattern in ENTRY_POINT_PATTERNS:
+        if rel_posix == pattern or rel_posix.endswith("/" + pattern):
+            return True
+    return False
+
+
 def scan_repository(root: Path) -> Dict[str, Any]:
     root = root.resolve()
+    ignore_patterns = load_ignore_patterns(root)
 
     # Language detection
-    languages = count_languages(root)
+    languages = count_languages(root, ignore_patterns)
 
-    # Manifests
+    # Manifests -- only the project's own, never a dependency's.
     manifests = {}
-    for manifest_name, manager in MANIFEST_FILES.items():
-        for mf in root.rglob(manifest_name):
-            if mf.is_file():
-                content = read_text(mf)
-                if manifest_name == "package.json":
-                    manifests[str(mf.relative_to(root))] = {
-                        "manager": manager,
-                        "parsed": parse_package_json(content)
-                    }
-                elif manifest_name == "requirements.txt":
-                    manifests[str(mf.relative_to(root))] = {
-                        "manager": manager,
-                        "parsed": {"dependencies": parse_requirements_txt(content)}
-                    }
-                else:
-                    manifests[str(mf.relative_to(root))] = {
-                        "manager": manager,
-                        "parsed": {"raw_preview": content[:2000]}
-                    }
+    for path in walk_files(root, ignore_patterns):
+        manifest_name = path.name
+        manager = MANIFEST_FILES.get(manifest_name)
+        if manager is None:
+            continue
+        content = read_text(path)
+        rel = str(path.relative_to(root))
+        if manifest_name == "package.json":
+            manifests[rel] = {
+                "manager": manager,
+                "parsed": parse_package_json(content)
+            }
+        elif manifest_name == "requirements.txt":
+            manifests[rel] = {
+                "manager": manager,
+                "parsed": {"dependencies": parse_requirements_txt(content)}
+            }
+        else:
+            manifests[rel] = {
+                "manager": manager,
+                "parsed": {"raw_preview": content[:2000]}
+            }
 
     # All dependencies flat list
     all_deps = []
@@ -305,43 +357,34 @@ def scan_repository(root: Path) -> Dict[str, Any]:
 
     # Config files
     config_files = []
-    for pattern in CONFIG_FILES:
-        for cf in root.rglob(pattern):
-            if cf.is_file():
-                config_files.append(str(cf.relative_to(root)))
-            elif cf.is_dir():
-                for f in cf.rglob("*"):
-                    if f.is_file():
-                        config_files.append(str(f.relative_to(root)))
+    for path in walk_files(root, ignore_patterns):
+        rel_posix = path.relative_to(root).as_posix()
+        if _config_file_matches(rel_posix, path.name):
+            config_files.append(str(path.relative_to(root)))
 
     # Test directories
     test_dirs = []
-    for pattern in TEST_DIR_PATTERNS:
-        for d in root.rglob(pattern):
-            if d.is_dir():
-                test_dirs.append(str(d.relative_to(root)))
+    for d in _iter_dirs(root, ignore_patterns):
+        if d.name in TEST_DIR_PATTERNS:
+            test_dirs.append(str(d.relative_to(root)))
 
     # Entry points
     entry_points = []
-    for pattern in ENTRY_POINT_PATTERNS:
-        for ep in root.rglob(pattern):
-            if ep.is_file():
-                entry_points.append(str(ep.relative_to(root)))
+    for path in walk_files(root, ignore_patterns):
+        if _entry_point_matches(path.relative_to(root).as_posix()):
+            entry_points.append(str(path.relative_to(root)))
 
     # README
     readme_path = None
-    for r in root.rglob("README*"):
-        if r.is_file():
-            readme_path = str(r.relative_to(root))
+    for path in walk_files(root, ignore_patterns):
+        if path.name.upper().startswith("README"):
+            readme_path = str(path.relative_to(root))
             break
 
     # Env vars from code
     env_vars = set()
-    for ext in [".js", ".ts", ".jsx", ".tsx", ".py"]:
-        for f in root.rglob(f"*{ext}"):
-            if f.is_file():
-                content = read_text(f)
-                env_vars.update(extract_env_vars(content))
+    for path in walk_source_files(root, [".js", ".ts", ".jsx", ".tsx", ".py"], ignore_patterns):
+        env_vars.update(extract_env_vars(read_text(path)))
 
     # Run commands from package.json
     run_commands = {}
@@ -375,6 +418,7 @@ def scan_repository(root: Path) -> Dict[str, Any]:
         "entry_points": sorted(set(entry_points)),
         "env_vars": sorted(env_vars),
         "run_commands": run_commands,
+        "ignore_patterns": ignore_patterns,
     }
 
 

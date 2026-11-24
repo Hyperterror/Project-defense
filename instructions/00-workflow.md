@@ -124,7 +124,7 @@ statuses.
 
 ## Phase 5: Documentation Generation
 
-**Goal:** produce three standalone documents from the VERIFIED project graph.
+**Goal:** produce four standalone documents from the VERIFIED project graph.
 
 **Documents (each in `.project-defense/docs/`):**
 1. `architecture-overview.md` -- system overview, technology stack, main
@@ -134,13 +134,20 @@ statuses.
    -> API -> DB -> response), state transitions, async flows, evidence appendix.
 3. `core-logic.md` -- the project's core algorithms and business rules,
    step-by-step explanations, edge cases handled, evidence appendix.
+4. `glossary.md` -- one row per named graph entity: a one-sentence definition in
+   domain language (never naming its technology), its `file:line`, a
+   verified/assumed status, and the words the user should avoid.
 
-**Template:** each document follows `templates/architecture-document.md`
-structure (purpose, stack, components, lifecycle/steps, decisions, summary,
-evidence).
+**Template:** each document follows its own template in `templates/`
+(`architecture-document.md`, `data-flow-document.md`, `core-logic-document.md`,
+`glossary-document.md`).
 
 **Rule:** only "code-verified" and "user-provided" entries appear in the main
 body. "UNVERIFIED" entries appear only in the evidence appendix with a warning.
+
+**Rule (glossary):** it is the terminology authority for every later phase. If
+an answer uses a different word for the same entity, flag it and ask which one
+is right before scoring.
 
 ---
 
@@ -176,6 +183,9 @@ and most Markdown viewers.
    without copying code.
 
 **Output:** `.project-defense/learning-path.md`.
+
+**Next step:** the learning path is the input to the review loop, not the end of
+it. `scripts/plan_review.py` turns attempts into a spaced schedule.
 
 **Example (React + Express + MongoDB):**
 | Stage | Topic | Project Connection |
@@ -293,6 +303,8 @@ report — pulling `overall_score`, `strengths`, `gaps`, and per-category
 4. Recommended next steps (priority ordered, each linked to a file/phase).
 5. "UNVERIFIED" items from the project graph that need human clarification.
 6. Rebuild challenge result (if attempted).
+7. A review schedule: run `scripts/plan_review.py <repo_root> --write` and link
+   `.project-defense/review-plan.md`.
 
 **Rule:** the report must be actionable -- "study React hooks" is weak;
 "review useEffect cleanup in src/components/DataFetcher.tsx lines 23-31" is

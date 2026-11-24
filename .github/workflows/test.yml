@@ -8,11 +8,18 @@ on:
 
 jobs:
   test:
-    name: Run unit tests
-    runs-on: ubuntu-latest
+    name: Tests (Python ${{ matrix.python-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.8", "3.10", "3.12"]
+        include:
+          # Windows catches path-separator and subprocess-quoting bugs that
+          # never show up on ubuntu.
+          - os: windows-latest
+            python-version: "3.12"
 
     steps:
       - name: Checkout
@@ -23,14 +30,49 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Run skill tests
-        run: |
-          python3 tests/test_skill.py -v
+      - name: Run the full test suite
+        # Discover every test module, not just test_skill.py: the scoring,
+        # challenge, workspace, assessment and robustness suites were silently
+        # skipped before, which is how a Python 3.8 incompatibility and a
+        # JS challenge that leaked its own solution both shipped.
+        run: python -m unittest discover -s tests -p "test_*.py" -v
 
-      - name: Smoke-test the example project
-        run: |
-          python3 scripts/scan_repository.py examples/example-todo-app
-          python3 scripts/detect_code_facts.py examples/example-todo-app
-          python3 scripts/build_graph.py examples/example-todo-app
-          python3 scripts/validate_graph.py examples/example-todo-app/.project-defense/project-graph.json
+      - name: Smoke-test every example project
         shell: bash
+        run: |
+          set -e
+          for example in example-todo-app example-django-blog example-fastapi-tasks example-nextjs-todo; do
+            echo "::group::$example"
+            python scripts/scan_repository.py "examples/$example"
+            python scripts/detect_code_facts.py "examples/$example"
+            python scripts/build_graph.py "examples/$example"
+            python scripts/validate_graph.py "examples/$example/.project-defense/project-graph.json"
+            python scripts/generate_question_bank.py "examples/$example"
+            python scripts/check_graph_freshness.py "examples/$example" || true
+            echo "::endgroup::"
+          done
+
+      - name: Documentation and wiring lint
+        # Catches a script nobody is told to run, a template nobody references,
+        # a broken relative link, and a duplicate rubric id.
+        run: python scripts/check_docs.py
+
+      - name: Validate the shipped rubrics and templates
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+          sys.path.insert(0, "scripts")
+          from validate_graph import validate_value
+
+          schema = json.loads(pathlib.Path("templates/rubric.schema.json").read_text())
+          failures = []
+          for path in sorted(pathlib.Path("rubrics").glob("*.json")):
+              data = json.loads(path.read_text())
+              errors = validate_value(data, schema, schema)
+              if errors:
+                  failures.append(f"{path}: {errors}")
+          if failures:
+              print("\n".join(failures), file=sys.stderr)
+              sys.exit(1)
+          print("All rubrics validate.")
+          PY

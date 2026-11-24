@@ -1,0 +1,51 @@
+{
+  "id": "failure-diagnosis-v1",
+  "question_id": "generic",
+  "category": "failure_scenario",
+  "topic": ["find the cause", "diagnose", "debug"],
+  "expected_concepts": [
+    "reproduction loop",
+    "minimisation",
+    "ranked hypotheses",
+    "instrumentation",
+    "regression test"
+  ],
+  "scoring_levels": {
+    "reproduction loop": {
+      "0": "Starts reading code to form a theory, with no way to observe the failure.",
+      "1": "Says they would 'reproduce it' but names no command or scenario.",
+      "2": "Names a concrete way to trigger the failure (a test, a curl, a fixture) and what it would assert.",
+      "3": "Specifies one command that is red-capable on this exact symptom, deterministic and fast, and has already run it once."
+    },
+    "minimisation": {
+      "0": "Keeps working against the full scenario.",
+      "1": "Says they would 'narrow it down' without saying what to cut.",
+      "2": "Cuts inputs, callers or steps one at a time and re-runs after each cut.",
+      "3": "Reduces to the smallest scenario that still fails, and can state that every remaining element is load-bearing."
+    },
+    "ranked hypotheses": {
+      "0": "Commits to the first plausible cause.",
+      "1": "Lists causes without ranking them or stating what each predicts.",
+      "2": "Produces 3-5 ranked hypotheses, each with a prediction that would falsify it.",
+      "3": "Ranks them with the prediction for each, and says which single observation would separate the top two."
+    },
+    "instrumentation": {
+      "0": "Suggests logging everything and grepping.",
+      "1": "Adds logs but changes several things between runs.",
+      "2": "Changes one variable at a time, with targeted probes at the boundary that distinguishes hypotheses.",
+      "3": "Maps each probe to a specific prediction, tags debug output for later cleanup, and prefers a debugger or REPL over logs."
+    },
+    "regression test": {
+      "0": "Fixes the symptom with no test.",
+      "1": "Writes a test after the fix, or tests a symptom adjacent to the real one.",
+      "2": "Writes a failing test at a seam that exercises the real bug pattern before fixing.",
+      "3": "Writes the failing test first at a correct seam, re-runs the original (unminimised) scenario after the fix, and says whether the fix belongs in the test or the code."
+    }
+  },
+  "max_score": 15,
+  "hints": [
+    "Before any theory: what is the single command that goes red on this bug?",
+    "What is the smallest scenario that still fails? Cut one thing at a time.",
+    "State what each hypothesis predicts, then design one probe that separates two of them."
+  ]
+}

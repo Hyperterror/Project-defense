@@ -25,6 +25,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SCHEMA_PATH = SCRIPT_DIR.parent / "templates" / "challenge.schema.json"
@@ -66,14 +67,28 @@ def _iter_entries(graph: dict):
                     yield section_key, entry
 
 
-def find_feature_entry(graph: dict, feature: str) -> dict | None:
-    """Find the first graph entry whose name or details text contains feature (case-insensitive)."""
-    feature_lower = feature.lower()
-    for _, entry in _iter_entries(graph):
-        name = str(entry.get("name", "")).lower()
-        details_text = json.dumps(entry.get("details", {})).lower()
-        if feature_lower in name or feature_lower in details_text:
-            return entry
+def find_feature_entry(graph: dict, feature: str) -> Optional[dict]:
+    """Find the first graph entry that matches *feature*.
+
+    Matching is case-insensitive and checks the entry's name, its route
+    fields (method, path, handler), its details, and its evidence file. This
+    lets `--feature "login"`, `--feature "/api/todos"` and
+    `--feature "server/routes/todos.js"` all resolve to a real entry instead
+    of falling back to a fabricated stub.
+    """
+    feature_lower = feature.lower().strip().replace("\\", "/")
+    for _section, entry in _iter_entries(graph):
+        haystacks = [
+            str(entry.get("name", "")),
+            str(entry.get("method", "")),
+            str(entry.get("path", "")),
+            str(entry.get("handler", "")),
+            json.dumps(entry.get("details", {})),
+            str(entry.get("evidence", {}).get("file", "")),
+        ]
+        for hay in haystacks:
+            if feature_lower and feature_lower in hay.lower().replace("\\", "/"):
+                return entry
     return None
 
 
@@ -104,6 +119,16 @@ def _get_git_revision(repo_root: Path) -> str:
 # -----------------------------------------------------------------------
 # Challenge ID
 # -----------------------------------------------------------------------
+
+def _safe_ident(name: str) -> str:
+    """Turn an arbitrary feature name into a valid snake_case identifier."""
+    cleaned = re.sub(r"[^A-Za-z0-9]+", "_", str(name)).strip("_").lower()
+    if not cleaned:
+        return "feature"
+    if cleaned[0].isdigit():
+        cleaned = "f_" + cleaned
+    return cleaned
+
 
 def _make_challenge_id(feature: str, challenge_type: str, difficulty: str, timestamp: int) -> str:
     raw = f"{feature}|{challenge_type}|{difficulty}|{timestamp}"
@@ -226,6 +251,370 @@ def _generate_test_skeleton(source_text: str, source_file: str) -> str:
 
 
 # -----------------------------------------------------------------------
+# JavaScript / TypeScript support
+# -----------------------------------------------------------------------
+
+JS_EXTS = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
+
+# Function declaration OR arrow function assigned to a binding.
+# Captures the text up to (not including) the opening brace of the body.
+RE_JS_FUNCTION = re.compile(
+    r"(?P<head>(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s*\*?\s*[A-Za-z_$][\w$]*\s*\([^)]*\)\s*)\{"
+    r"|(?P<head2>(?:export\s+)?(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*(?:async\s+)?(?:function\s*[A-Za-z_$]*\s*\([^)]*\)|\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*)\{",
+    re.DOTALL,
+)
+
+
+def _skip_js_string(text: str, i: int) -> int:
+    """Return the index just past the JS string literal starting at i."""
+    quote = text[i]
+    i += 1
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == quote:
+            return i + 1
+        i += 1
+    return i
+
+
+def _skip_js_template(text: str, i: int) -> int:
+    """Return the index just past the template literal starting at i."""
+    i += 1
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "`":
+            return i + 1
+        if ch == "$" and i + 1 < len(text) and text[i + 1] == "{":
+            i = _find_matching_brace(text, i + 1)
+            if i < 0:
+                return len(text)
+            i += 1
+            continue
+        i += 1
+    return i
+
+
+def _find_matching_brace(text: str, open_idx: int) -> int:
+    """Find the closing brace matching text[open_idx] == '{'.
+
+    Skips braces inside strings, template literals and comments so that real
+    source files do not produce a truncated replacement.
+    """
+    depth = 0
+    i = open_idx
+    while i < len(text):
+        ch = text[i]
+        if ch in ("'", '"'):
+            i = _skip_js_string(text, i)
+            continue
+        if ch == "`":
+            i = _skip_js_template(text, i)
+            continue
+        if ch == "/" and i + 1 < len(text):
+            if text[i + 1] == "/":
+                nl = text.find("\n", i)
+                i = len(text) if nl < 0 else nl
+                continue
+            if text[i + 1] == "*":
+                end = text.find("*/", i + 2)
+                i = len(text) if end < 0 else end + 2
+                continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+def _js_indent_of_line(text: str, idx: int) -> str:
+    """Return the leading whitespace of the line containing idx."""
+    line_start = text.rfind("\n", 0, idx) + 1
+    line = text[line_start:idx]
+    return line[: len(line) - len(line.lstrip())]
+
+
+def _js_code_mask(text: str) -> str:
+    """Return text with string and comment content blanked out (same length).
+
+    Regex searches run against the mask so a match can never land inside a
+    string literal or a comment, while offsets stay valid for the original
+    text.
+    """
+    chars = list(text)
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch in ("'", '"'):
+            end = _skip_js_string(text, i)
+        elif ch == "`":
+            end = _skip_js_template(text, i)
+        elif ch == "/" and i + 1 < n and text[i + 1] == "/":
+            nl = text.find("\n", i)
+            end = n if nl < 0 else nl
+        elif ch == "/" and i + 1 < n and text[i + 1] == "*":
+            close = text.find("*/", i + 2)
+            end = n if close < 0 else close + 2
+        else:
+            i += 1
+            continue
+        for k in range(i, min(end, n)):
+            if chars[k] != "\n":
+                chars[k] = " "
+        i = end
+    return "".join(chars)
+
+
+RE_JS_ARROW_BODY = re.compile(r"=>\s*\{")
+
+
+def _stub_js_arrow_bodies(source_text: str) -> str:
+    """Stub the block body of every arrow function, including callbacks.
+
+    Route handlers, middleware and promise chains are almost always written as
+    arrow functions passed as arguments (`app.get("/x", (req, res) => {...})`),
+    which the declaration-based pass cannot see. Without this pass such a file
+    is shipped verbatim as its own starter -- i.e. the solution.
+    """
+    mask = _js_code_mask(source_text)
+    candidates = []
+    for m in RE_JS_ARROW_BODY.finditer(mask):
+        open_idx = m.end() - 1
+        close_idx = _find_matching_brace(source_text, open_idx)
+        if close_idx < 0:
+            continue
+        candidates.append((open_idx, close_idx))
+
+    # Drop nested spans: replacing an outer body already removes the inner one.
+    spans = []
+    for open_idx, close_idx in candidates:
+        if any(outer_open < open_idx < outer_close for outer_open, outer_close in spans):
+            continue
+        spans = [s for s in spans if not (open_idx < s[0] < close_idx)]
+        spans.append((open_idx, close_idx))
+
+    result = source_text
+    for open_idx, close_idx in sorted(spans, reverse=True):
+        indent = _js_indent_of_line(source_text, open_idx)
+        body_indent = indent + "  "
+        new_body = (
+            "\n"
+            + body_indent + "// TODO: implement\n"
+            + body_indent + 'throw new Error("Not implemented");\n'
+            + indent
+        )
+        result = result[: open_idx + 1] + new_body + result[close_idx:]
+    return result
+
+
+def _stub_js_bodies(source_text: str) -> str:
+    """Replace JavaScript/TypeScript function bodies with TODO stubs.
+
+    Imports, constants and the function signatures are preserved so the
+    learner still sees the interface; only the implementation is removed.
+    """
+    spans = []
+    for m in RE_JS_FUNCTION.finditer(source_text):
+        open_idx = m.end() - 1  # the '{' captured at the end of the match
+        if source_text[open_idx] != "{":
+            continue
+        close_idx = _find_matching_brace(source_text, open_idx)
+        if close_idx < 0:
+            continue
+        spans.append((m.start(), open_idx, close_idx))
+
+    if not spans:
+        # No declared functions: fall through to the arrow/callback pass.
+        return _stub_js_arrow_bodies(source_text)
+
+    # Keep only the outermost spans. Nested functions are removed together with
+    # their parent body; replacing an inner span would also shift the offsets
+    # of every span after it and truncate the file.
+    spans.sort()
+    outer = []
+    for start, open_idx, close_idx in spans:
+        if outer and close_idx <= outer[-1][2]:
+            continue
+        outer.append((start, open_idx, close_idx))
+    spans = outer
+
+    # Replace from the end so earlier offsets stay valid.
+    result = source_text
+    for start, open_idx, close_idx in reversed(spans):
+        indent = _js_indent_of_line(source_text, start)
+        body_indent = indent + "  "
+        new_body = (
+            "\n"
+            + body_indent + "// TODO: implement\n"
+            + body_indent + 'throw new Error("Not implemented");\n'
+            + indent
+        )
+        result = result[: open_idx + 1] + new_body + result[close_idx:]
+    return _stub_js_arrow_bodies(result)
+
+
+def _generate_js_test_skeleton(source_text: str, source_file: str) -> str:
+    """Generate a JS/TS test skeleton (Jest/Vitest style) for source_file."""
+    stem = Path(source_file).stem
+    names = re.findall(r"\bfunction\s+([A-Za-z_$][\w$]*)\s*\(", source_text)
+    names += re.findall(
+        r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>",
+        source_text,
+    )
+    # De-duplicate while preserving order.
+    seen = set()
+    fn_names = []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            fn_names.append(n)
+
+    lines = [
+        f"// Tests for {source_file}",
+        "// TODO: fill in the test bodies",
+        "",
+        f'describe("{stem}", () => {{',
+    ]
+    if fn_names:
+        for fn in fn_names[:5]:
+            lines += [
+                f'  test("{fn} ...", () => {{',
+                f"    // TODO: test {fn}",
+                "    expect(true).toBe(false); // replace with a real assertion",
+                "  });",
+                "",
+            ]
+    else:
+        lines += [
+            '  test("placeholder", () => {',
+            "    // TODO: add tests",
+            "    expect(true).toBe(false); // replace with a real assertion",
+            "  });",
+            "",
+        ]
+    lines += ["});", ""]
+    return "\n".join(lines)
+
+
+def _stub_source(source_text: str, suffix: str) -> str:
+    """Choose the correct body-stubber for the file type."""
+    if suffix.lower() in JS_EXTS:
+        return _stub_js_bodies(source_text)
+    return _stub_function_body(source_text)
+
+
+def _test_skeleton_for(source_text: str, source_file: str, suffix: str) -> str:
+    """Choose the correct test-skeleton generator for the file type."""
+    if suffix.lower() in JS_EXTS:
+        return _generate_js_test_skeleton(source_text, source_file)
+    return _generate_test_skeleton(source_text, source_file)
+
+
+def _render_explainer(feature: str, entry_name: str, challenge_type: str,
+                      difficulty: str, source_file: str, objective: str,
+                      checks: list, hint_count: int) -> str:
+    """Write the teaching half of a challenge.
+
+    A problem plus a hidden solution teaches almost nothing: the learner needs
+    to know what to notice, what 'done' means, and how the work will be judged
+    before they start. This file carries that, and never the implementation.
+    """
+    kind = {
+        "function_reconstruction": "rebuild a behaviour from its interface",
+        "bug_fix": "find and fix a defect without rewriting the module",
+        "test_writing": "pin behaviour down with tests that would catch a regression",
+    }.get(challenge_type, challenge_type)
+
+    lines = [
+        "# Challenge: %s" % entry_name,
+        "",
+        "**Type:** %s (%s)  " % (challenge_type.replace("_", " "), difficulty),
+        "**Skill this trains:** %s  " % kind,
+        "**Source:** `%s`" % source_file,
+        "",
+        "## Objective",
+        "",
+        objective,
+        "",
+        "## Before you start",
+        "",
+        "1. Read the starter file in `workspace/` end to end. Note the imports and",
+        "   the signatures; those are the contract you have to honour.",
+        "2. Write down, in one sentence, what the module is responsible for. If you",
+        "   cannot, re-read the graph entry for `%s` first." % feature,
+        "3. Do not open the solution. It is not in the workspace, and you lose the",
+        "   exercise the moment you read it.",
+        "",
+        "## Definition of done",
+        "",
+        "Every check below must pass:",
+        "",
+    ]
+    for check in checks:
+        lines.append("- **%s** — %s" % (check.get("id", "check"), check.get("description", "")))
+
+    lines += [
+        "",
+        "## How you will be judged",
+        "",
+        "Passing checks is necessary, not sufficient. A defense answer about this",
+        "module is scored on:",
+        "",
+        "- what it is responsible for, stated without naming a library;",
+        "- the edge cases the original handles, and which ones it does not;",
+        "- why this shape (module boundaries, seams) rather than the obvious one;",
+        "- what would break if it were deleted.",
+        "",
+        "## Hints",
+        "",
+        "%d hint(s) are available in the manifest. Ask for one at a time; a hint"
+        % hint_count,
+        "counts as an attempt.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _build_checks(file_name: str, suffix: str) -> list:
+    """Build a syntax check appropriate for the starter file type."""
+    if suffix.lower() == ".py":
+        return [{
+            "id": "check-syntax",
+            "description": "Verify the file has no Python syntax errors.",
+            "command": ["python3", "-c",
+                        f"import ast, sys; ast.parse(open(r'{file_name}', encoding='utf-8').read()); sys.exit(0)"],
+            "expected_exit_code": 0,
+            "timeout_seconds": 10,
+        }]
+    if suffix.lower() in {".js", ".mjs", ".cjs"}:
+        return [{
+            "id": "check-syntax",
+            "description": "Verify the file has no JavaScript syntax errors (node --check).",
+            "command": ["node", "--check", file_name],
+            "expected_exit_code": 0,
+            "timeout_seconds": 10,
+        }]
+    # JSX/TSX/TS cannot be checked by `node --check` without a toolchain.
+    # Fall back to a structural check: the file must exist and be non-empty.
+    return [{
+        "id": "check-file-present",
+        "description": "Verify the starter file exists and is not empty.",
+        "command": ["python3", "-c",
+                    f"import sys; sys.exit(0 if open(r'{file_name}', encoding='utf-8').read().strip() else 1)"],
+        "expected_exit_code": 0,
+        "timeout_seconds": 10,
+    }]
+
+
+# -----------------------------------------------------------------------
 # Main generation logic
 # -----------------------------------------------------------------------
 
@@ -251,6 +640,23 @@ def generate_challenge(repo_root: Path, feature: str, challenge_type: str, diffi
 
     entry = find_feature_entry(graph, feature)
 
+    # Never fabricate a challenge for a feature that is not in the graph: the
+    # old fallback produced a Python stub named after a JavaScript path (for
+    # example `def server/index.js()`), which cannot be solved or checked.
+    if entry is None:
+        available = []
+        for _section, candidate in _iter_entries(graph):
+            name = str(candidate.get("name", "")).strip()
+            if name and name not in available:
+                available.append(name)
+        preview = ", ".join(available[:12]) or "(none found)"
+        sys.exit(
+            f"Error: feature '{feature}' was not found in the project graph.\n"
+            f"Available features include: {preview}\n"
+            "Pick one of these names (a substring is enough), or add the feature "
+            "to the graph during the Phase 4 verification loop."
+        )
+
     # Build challenge_id
     challenge_id = _make_challenge_id(feature, challenge_type, difficulty, timestamp)
     challenge_dir = defense_dir / "challenges" / challenge_id
@@ -270,9 +676,9 @@ def generate_challenge(repo_root: Path, feature: str, challenge_type: str, diffi
                 "lines": ev.get("lines", [1, 1]),
                 "description": entry.get("name", feature),
             }]
-    # Fallback: create a stub source file
+    # Fallback: create a stub source file (only when the graph entry has no file).
     if not source_file:
-        source_file = f"{feature.lower().replace(' ', '_')}.py"
+        source_file = f"{_safe_ident(feature)}.py"
         source_refs = [{
             "file": source_file,
             "lines": [1, 10],
@@ -310,18 +716,43 @@ def generate_challenge(repo_root: Path, feature: str, challenge_type: str, diffi
     if original_path.exists():
         original_text = original_path.read_text(encoding="utf-8", errors="replace")
     else:
-        original_text = f"# Stub for {source_file}\n\ndef {entry_name.lower().replace(' ', '_')}():\n    pass\n"
+        original_text = f"# Stub for {source_file}\n\ndef {_safe_ident(entry_name)}():\n    pass\n"
 
     if challenge_type == "function_reconstruction":
-        starter_content = _stub_function_body(original_text)
+        starter_content = _stub_source(original_text, source_suffix)
     elif challenge_type == "bug_fix":
         starter_content = _introduce_bug(original_text)
     else:  # test_writing
-        starter_content = _generate_test_skeleton(original_text, source_file)
-        starter_file_name = f"test_{source_stem}{source_suffix}"
+        starter_content = _test_skeleton_for(original_text, source_file, source_suffix)
+        if source_suffix.lower() in JS_EXTS:
+            starter_file_name = f"{source_stem}.test{source_suffix}"
+        else:
+            starter_file_name = f"test_{source_stem}{source_suffix}"
+
+    # Never ship a starter that is byte-identical to the source: that is the
+    # answer, not the exercise.
+    if challenge_type in ("function_reconstruction", "bug_fix"):
+        if starter_content.strip() == original_text.strip():
+            sys.exit(
+                f"Error: cannot build a '{challenge_type}' challenge from '{source_file}'.\n"
+                "The generated starter would be identical to the original source, so it "
+                "would leak the answer.\n"
+                "Pick a file that contains function bodies (declarations, exported "
+                "functions, or arrow callbacks), or choose a different --feature."
+            )
 
     starter_file_path = starter_dir / starter_file_name
     starter_file_path.write_text(starter_content, encoding="utf-8")
+
+    # Reference solution: kept beside the starter, never copied into the
+    # workspace, and revealed by run_checks.py only once every check passes.
+    # Hiding it from the workspace is what stops the answer being readable
+    # while the exercise is open.
+    solution_dir = challenge_dir / "solution"
+    solution_dir.mkdir(parents=True, exist_ok=True)
+    solution_name = str(Path(source_file).name) if source_file else starter_file_name
+    solution_path = solution_dir / solution_name
+    solution_path.write_text(original_text, encoding="utf-8")
 
     # Build workspace section
     workspace = {
@@ -329,16 +760,27 @@ def generate_challenge(repo_root: Path, feature: str, challenge_type: str, diffi
         "starter_file": starter_file_name,
     }
 
-    # Build checks
-    checks = [
-        {
-            "id": "check-syntax",
-            "description": "Verify the file has no syntax errors.",
-            "command": ["python3", "-c", f"import ast, sys; ast.parse(open('{starter_file_name}').read()); sys.exit(0)"],
-            "expected_exit_code": 0,
-            "timeout_seconds": 10,
-        }
-    ]
+    # Build checks appropriate for the starter file type (Python AST,
+    # `node --check`, or a structural check for JSX/TSX).
+    checks = _build_checks(starter_file_name, source_suffix)
+
+    # Explainer: the teaching half of the exercise (objective, what to read
+    # first, definition of done, how the work is judged). A problem plus a
+    # hidden solution teaches far less than one that says what to notice.
+    explainer_path = challenge_dir / "explainer.md"
+    explainer_path.write_text(
+        _render_explainer(
+            feature=feature,
+            entry_name=entry_name,
+            challenge_type=challenge_type,
+            difficulty=difficulty,
+            source_file=source_file,
+            objective=objective,
+            checks=checks,
+            hint_count=len(hints),
+        ),
+        encoding="utf-8",
+    )
 
     # Assemble manifest
     manifest = {
@@ -351,6 +793,8 @@ def generate_challenge(repo_root: Path, feature: str, challenge_type: str, diffi
         "objective": objective,
         "workspace": workspace,
         "checks": checks,
+        "explainer": "explainer.md",
+        "solution_file": "solution/%s" % solution_name,
         "hint_policy": {
             "reveal_after_attempts": 2,
             "max_hints": 4,

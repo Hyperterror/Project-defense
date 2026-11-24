@@ -23,10 +23,13 @@ Stdlib only, Python 3.8+.
 """
 
 import argparse
+import datetime as dt
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -66,7 +69,7 @@ def _load_question_bank(repo_root: Path) -> dict:
         sys.exit(f"Error: '{qb_path}' contains invalid JSON.\nDetails: {exc}")
 
 
-def _load_rubric(rubric_id: str) -> dict | None:
+def _load_rubric(rubric_id: str) -> Optional[dict]:
     """Load a rubric by its id.  Returns None if not found."""
     if not rubric_id:
         return None
@@ -79,21 +82,47 @@ def _load_rubric(rubric_id: str) -> dict | None:
         return None
 
 
+def _token_present(token: str, answer_lower: str) -> bool:
+    """Return True when token (or a 5-character stem of it) appears in the answer.
+
+    The stem match lets 'responsibility' match 'responsible' and
+    'reversibility' match 'reversible' without a full stemmer.
+    """
+    if not token:
+        return False
+    if token in answer_lower:
+        return True
+    return len(token) >= 5 and token[:5] in answer_lower
+
+
 def _score_answer(rubric: dict, answer_text: str) -> dict:
     """Score an answer against a rubric.  Returns a scores dict mapping concept -> 0-3.
 
-    This is a heuristic keyword-based scorer (since we have no LLM here). It
-    assigns 2 if any expected_concept keyword appears in the answer, 1 if the
-    answer is non-trivial, 0 otherwise.
+    FALLBACK ONLY. This is a deterministic keyword matcher used when no agent
+    is available to read the rubric's scoring_levels. The agent should produce
+    the authoritative scores and persist them via
+    `save_progress.py update <session> --score <q> <concept> <0-3>`; otherwise
+    the session is marked `scored_by: heuristic`.
+
+      - 2: the concept phrase, or every significant word of it, appears
+      - 1: at least one significant word of it appears
+      - 0: no overlap with the concept
+
+    Length alone never earns a point: a long answer that misses the concept
+    is still a miss.
     """
     scores = {}
     if not rubric:
         return scores
     answer_lower = answer_text.lower()
     for concept in rubric.get("expected_concepts", []):
-        if concept.replace("-", " ") in answer_lower or concept in answer_lower:
+        phrase = concept.replace("-", " ").replace("_", " ").lower()
+        tokens = [t for t in re.split(r"[^a-z0-9]+", phrase) if len(t) > 2]
+        if phrase and (phrase in answer_lower or concept.lower() in answer_lower):
             scores[concept] = 2
-        elif len(answer_text.strip()) > 20:
+        elif tokens and all(_token_present(t, answer_lower) for t in tokens):
+            scores[concept] = 2
+        elif tokens and any(_token_present(t, answer_lower) for t in tokens):
             scores[concept] = 1
         else:
             scores[concept] = 0
@@ -170,6 +199,7 @@ def cmd_answer(repo_root: Path, session_id: str, question_id: str, answer_text: 
 
     # Record the answer
     q_entry["answer"] = answer_text
+    q_entry["answered_at"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
     # Score against rubric if available
     rubric_id = q_entry.get("rubric_id", "")
@@ -177,6 +207,7 @@ def cmd_answer(repo_root: Path, session_id: str, question_id: str, answer_text: 
     if rubric:
         scores = _score_answer(rubric, answer_text)
         q_entry["scores"] = scores
+        q_entry["scored_by"] = "heuristic"
 
     # If coding task, run checks
     is_coding = q_entry.get("category") == "coding_task"
@@ -186,7 +217,14 @@ def cmd_answer(repo_root: Path, session_id: str, question_id: str, answer_text: 
         coding_result = {"question_id": question_id, "status": "not_applicable"}
         session.setdefault("coding_results", []).append(coding_result)
 
-    sp.update_session(sessions_dir, session_id, {"questions": questions})
+    sp.update_session(
+        sessions_dir,
+        session_id,
+        {
+            "questions": questions,
+            "coding_results": session.get("coding_results", []),
+        },
+    )
 
     # Find next question
     bank = _load_question_bank(repo_root)
@@ -221,6 +259,24 @@ def cmd_answer(repo_root: Path, session_id: str, question_id: str, answer_text: 
     print(json.dumps(out, indent=2))
 
 
+def _score_reliability(score: dict) -> str:
+    """Describe how much of a score came from the keyword fallback.
+
+    Returns 'agent-scored' (every graded answer was scored against a rubric),
+    'heuristic-only' (only the fallback ran) or 'mixed'.
+    """
+    categories = score.get("categories", {})
+    graded = sum(c.get("scored_count", 0) for c in categories.values())
+    heuristic = sum(c.get("heuristic_scored", 0) for c in categories.values())
+    if not graded:
+        return "agent-scored"
+    if heuristic >= graded:
+        return "heuristic-only"
+    if heuristic:
+        return "mixed"
+    return "agent-scored"
+
+
 def cmd_finish(repo_root: Path, session_id: str) -> None:
     sessions_dir = _sessions_dir(repo_root)
 
@@ -252,7 +308,24 @@ def cmd_finish(repo_root: Path, session_id: str) -> None:
     score_path = sessions_dir / f"{session_id}-score.json"
     score_path.write_text(json.dumps(score, indent=2), encoding="utf-8")
 
+    # Say plainly how trustworthy this number is. A report produced only by the
+    # keyword fallback measures the instrument, not the candidate.
+    reliability = _score_reliability(score)
+    score["score_reliability"] = reliability
+    session["score_reliability"] = reliability
+    sp.update_session(sessions_dir, session_id, session)
+    score_path.write_text(json.dumps(score, indent=2), encoding="utf-8")
+
     print(json.dumps(score, indent=2))
+    if reliability != "agent-scored":
+        print(
+            "\nNote: this score was produced by the keyword fallback, not by reading "
+            "the rubrics. Treat it as a smoke signal only. Re-score the answers "
+            "against each rubric's scoring_levels and record them with:\n"
+            f"  python scripts/save_progress.py <repo-root> update {session_id} "
+            "--score <question-id> <concept> <0-3>",
+            file=sys.stderr,
+        )
 
 
 # -----------------------------------------------------------------------

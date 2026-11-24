@@ -31,6 +31,25 @@ This skill turns the agent into a project-defense coach: it analyzes the user's 
 - If README and code conflict, the code takes priority — but always flag the conflict.
 - Ask the user before assuming intent, deployment or business rules.
 
+## Graph Freshness
+
+`project-graph.json` records `analyzed_at` and `git_head`. Before quoting the
+graph in any later phase, run:
+
+```bash
+python scripts/check_graph_freshness.py <repo-root>
+```
+
+Exit 0 means the graph matches HEAD. Exit 1 means it is stale: re-run Phases 1-3
+(or tell the user the graph predates the current commit) before generating docs,
+questions or an interview from it. Exit 2 means the graph is missing.
+
+## Exclusion Rules
+
+Dependency, build and VCS directories are skipped automatically. Encourage the
+user to add a `.project-defenseignore` for generated code, fixtures or vendored
+modules; both `scan_repository.py` and `detect_code_facts.py` honour it.
+
 ## Resumption
 
 When `.project-defense/project-graph.json` already exists in the target repository, the agent MUST ask the user the following question before doing anything else:
@@ -71,9 +90,14 @@ Full phase mechanics for every phase live in instructions/00-workflow.md.
 Enter Practice Mode when the user says "give me a challenge", "practice", or "coding exercise".
 
 **Starting a challenge:**
-1. Call `scripts/generate_challenge.py <repo_path> --feature <feature> --type <type> --difficulty <level>` to create a challenge manifest and starter files under `.project-defense/challenges/<challenge-id>/`.
+1. Call `scripts/generate_challenge.py <repo_path> --feature <feature> --type <type> --difficulty <level>` to create a challenge manifest, an `explainer.md`, a `starter/` file and a `solution/` reference under `.project-defense/challenges/<challenge-id>/`.
+   `--feature` accepts an entry name (`useAuth`), a route path (`/api/todos`), or a file path (`server/routes/todos.js`). If nothing matches, the script stops and lists the available features — pass one of those instead of retrying the same name.
 2. Call `scripts/prepare_workspace.py <repo_path> --challenge <challenge-id>` to populate the workspace directory with only the allowed starter files.
 3. Present the challenge to the user: show the objective, where the starter files are, and the acceptance criteria.
+
+The starter never contains the implementation: Python bodies are replaced via AST, JS/TS bodies via brace matching that includes arrow-function callbacks. If a starter would be identical to the source (a file with no function bodies), the script refuses to create the challenge — pick a different feature rather than working around it.
+
+The reference solution lives in `solution/`, is never copied into `workspace/`, and `run_checks.py` only reports its path once every check passes. Do not reveal it earlier, even on request: point at the next hint instead.
 
 **Coaching loop:**
 - Answer questions and give guidance without revealing the full solution.
@@ -103,21 +127,36 @@ Enter Assessment Mode when the user says "assess me", "start assessment", or "te
 - When all questions are answered, call `scripts/assess.py <repo_path> finish <session-id>`.
 - Report the overall score, strengths, and gaps to the user.
 - The full score JSON is written to `.project-defense/sessions/<session-id>-score.json`.
+- Check `score_reliability` before quoting a number. `heuristic-only` means only the keyword fallback graded the answers: say so, and re-score against `scoring_levels` with `save_progress.py update ... --score` first.
+
+## Review Mode
+
+Enter Review Mode when the user says "what should I study", "review", "I have an interview on Friday", or asks to practise again.
+
+Run `scripts/plan_review.py <repo_path>` (add `--write` to save `.project-defense/review-plan.md`). It returns the questions that are due today, interleaved across categories.
+
+Rules that make the loop work:
+- **Retrieval before review.** The user answers from memory first. Do not explain, hint, or let them re-read the docs beforehand.
+- **Score against the rubric**, not by feel: read `scoring_levels`, then `save_progress.py update <session> --score <question-id> <concept> <0-3>`.
+- **Respect the spacing.** If nothing is due, say so and suggest one thing to build or read instead. Cramming the same question daily builds fluency, not recall.
+- **Follow the gaps.** `concept_gaps` names the concepts that scored below 2; ask about those, not the whole question again.
 
 ## Artifacts
 All outputs go in a `.project-defense/` folder at the analyzed repository's root:
 
 - `scan-facts.json` — raw output of `scripts/scan_repository.py`
 - `code-facts.json` — raw output of `scripts/detect_code_facts.py` (routes, components, models, auth)
-- `project-graph.json` — the project graph; schema: `templates/project-graph.schema.json`
+- `project-graph.json` — the project graph; schema: `templates/project-graph.schema.json`. Carries `session_identity`, `analyzed_at`, `git_head`, `content_fingerprint` and `relationships` (imports / tested_by / protects edges) alongside the graph sections.
 - `docs/architecture-overview.md` — system overview, components, stack
 - `docs/data-flow.md` — request lifecycle and data movement between layers
 - `docs/core-logic.md` — the project's core algorithms and business rules
+- `docs/glossary.md` — domain vocabulary: one sentence per entity, in the project's words
 - `diagrams/architecture.mmd` — Mermaid architecture diagram source
 - `diagrams/data-flow.mmd` — Mermaid data-flow diagram source
 - `diagrams/user-flow.mmd` — Mermaid user-flow diagram source
 - Mermaid files are text, not rendered images
 - `learning-path.md` — personalized learning path
+- `review-plan.md` — spaced-retrieval plan produced by `scripts/plan_review.py`
 - `question-bank.md` — project-specific interview questions
 - `readiness-report.md` — final readiness verdict
 

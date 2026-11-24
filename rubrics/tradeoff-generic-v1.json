@@ -1,0 +1,43 @@
+{
+  "id": "tradeoff-generic-v1",
+  "question_id": "generic",
+  "category": "trade_off",
+  "expected_concepts": [
+    "alternatives",
+    "constraints",
+    "costs",
+    "reversibility"
+  ],
+  "scoring_levels": {
+    "alternatives": {
+      "0": "No alternative technology or approach is named.",
+      "1": "Names an alternative but cannot say why it was rejected.",
+      "2": "Names at least one real alternative and the decisive difference.",
+      "3": "Compares two or more alternatives on the dimension that actually decided it."
+    },
+    "constraints": {
+      "0": "The choice is presented as arbitrary or 'best practice'.",
+      "1": "Mentions team size or familiarity without linking it to the decision.",
+      "2": "Names the constraints (team, timeline, data shape, deployment target) that narrowed the options.",
+      "3": "Explains which constraint was binding and what would change if it disappeared."
+    },
+    "costs": {
+      "0": "Claims the choice has no downside.",
+      "1": "Names a cost only in the abstract ('it can be slower').",
+      "2": "Names a concrete cost and where it shows up in this codebase.",
+      "3": "Quantifies or bounds the cost and names the mitigation already in place."
+    },
+    "reversibility": {
+      "0": "No sense of how hard the decision is to undo.",
+      "1": "Says it 'could be swapped later' with no analysis.",
+      "2": "Identifies what is coupled to this choice (schemas, queries, deployment).",
+      "3": "Describes the migration path, its blast radius, and whether it can be done incrementally."
+    }
+  },
+  "hints": [
+    "Name the alternative you did not pick.",
+    "Name the constraint that made the difference a real one.",
+    "Say what it would cost to change your mind later."
+  ],
+  "max_score": 12
+}

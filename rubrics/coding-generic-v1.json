@@ -1,0 +1,43 @@
+{
+  "id": "coding-generic-v1",
+  "question_id": "generic",
+  "category": "coding_task",
+  "expected_concepts": [
+    "correctness",
+    "edge-cases",
+    "error-handling",
+    "tests"
+  ],
+  "scoring_levels": {
+    "correctness": {
+      "0": "The implementation does not work for the stated happy path.",
+      "1": "Works for the happy path but the approach is unclear or partly hard-coded.",
+      "2": "Correct happy path with a clear, direct implementation.",
+      "3": "Correct, minimal, and idiomatic for the surrounding codebase."
+    },
+    "edge-cases": {
+      "0": "No edge cases considered.",
+      "1": "Mentions edge cases but does not handle them in code.",
+      "2": "Handles the obvious cases (empty input, missing record, bad token).",
+      "3": "Handles empty, malformed, and boundary input, and says why each case matters."
+    },
+    "error-handling": {
+      "0": "Errors are ignored or swallowed silently.",
+      "1": "Uses try/catch but returns an unclear result on failure.",
+      "2": "Returns a clear error and the correct status code.",
+      "3": "Returns a clear error, the correct status code, and does not leak internal detail."
+    },
+    "tests": {
+      "0": "No tests proposed.",
+      "1": "Proposes tests only for the happy path.",
+      "2": "Proposes a happy-path test and at least one failure test.",
+      "3": "Proposes happy-path, failure, and boundary tests, and says what each would catch."
+    }
+  },
+  "hints": [
+    "Write the happy path first, then list the inputs that would break it.",
+    "What status code and body should the caller get when this fails?",
+    "Name one test that would fail if your implementation were subtly wrong."
+  ],
+  "max_score": 12
+}

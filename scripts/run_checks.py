@@ -155,6 +155,25 @@ def run_checks(repo_root: Path, challenge_id: str) -> dict:
         "overall": overall,
     }
 
+    # Reveal the reference solution only once the work passes. Before that, its
+    # existence stays a line in the manifest, not something to copy from.
+    solution_file = manifest.get("solution_file")
+    if solution_file:
+        solution_path = challenge_dir / solution_file
+        result["solution_available"] = bool(solution_path.exists())
+        if overall == "PASSED" and solution_path.exists():
+            result["solution_path"] = str(solution_path)
+            result["next_step"] = (
+                "All checks pass. Now read the reference solution and diff it "
+                "against yours: what did it do differently, and was either "
+                "version easier to explain out loud?"
+            )
+        else:
+            result["next_step"] = (
+                "Fix the failing checks first; the reference solution unlocks "
+                "when they all pass."
+            )
+
     result_path = challenge_dir / "result.json"
     result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result

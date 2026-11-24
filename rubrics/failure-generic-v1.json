@@ -1,0 +1,43 @@
+{
+  "id": "failure-generic-v1",
+  "question_id": "generic",
+  "category": "failure_scenario",
+  "expected_concepts": [
+    "failure-mode",
+    "detection",
+    "recovery",
+    "user-impact"
+  ],
+  "scoring_levels": {
+    "failure-mode": {
+      "0": "Does not describe what actually fails.",
+      "1": "Names the failing dependency but not the concrete symptom (exception, timeout, empty result).",
+      "2": "Describes the concrete failure and where in the request path it surfaces.",
+      "3": "Describes the failure, the exact error path, and any cascading effect on other components."
+    },
+    "detection": {
+      "0": "No indication of how the failure would be noticed.",
+      "1": "Says 'logs will show it' without naming the log, status code or metric.",
+      "2": "Names the status code, log line or metric that surfaces the failure.",
+      "3": "Explains how a developer or monitor distinguishes this failure from similar ones."
+    },
+    "recovery": {
+      "0": "No recovery or retry behaviour described.",
+      "1": "Mentions retry or crash without saying which one actually happens.",
+      "2": "States what the system does next (retry, fail fast, degrade) and where that is implemented.",
+      "3": "Explains the recovery strategy, its limits (backoff, max attempts), and what the caller sees meanwhile."
+    },
+    "user-impact": {
+      "0": "Does not say what the user experiences.",
+      "1": "Says 'the user gets an error' without the shape of that error.",
+      "2": "Describes the UI state and the message or redirect the user sees.",
+      "3": "Describes the UI state, whether data is lost, and what the user can do to recover."
+    }
+  },
+  "hints": [
+    "Name the dependency that fails and the exact symptom.",
+    "Follow the error to the status code or log line that proves it.",
+    "Say what the user sees on screen, not just what the server logs."
+  ],
+  "max_score": 12
+}

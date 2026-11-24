@@ -41,6 +41,22 @@ template in `templates/`:**
 - Invariants (what must always be true)
 - Common failure modes
 - Things you'd refactor (be honest — interviewers reward self-awareness)
+
+### 4. `docs/glossary.md` (from `templates/glossary-document.md`)
+
+One row per named entity in the graph (models, services, routes as actions,
+roles), each with a one-sentence definition and its `file:line`.
+
+- Define the term **without naming its technology**. "Todo: a single task owned
+  by one user", not "a Mongoose schema". If a definition needs the framework to
+  make sense, the concept is not yet understood — that is what interviewers
+  probe.
+- Mark each row `verified` or `assumed` from the graph evidence status.
+- Record words the user used differently from the code, under **Words to
+  avoid**, so answers stop drifting between two names for one thing.
+
+This file is the terminology authority for Phases 7-10: when an answer uses a
+different word for the same entity, flag it and ask which one is right.
 - Interview-ready summary
 - Evidence appendix
 
@@ -218,14 +234,46 @@ Based on your project (React + Express + MongoDB), here is your path:
 ### Scoring
 Each rubric concept: 0 (missing) | 1 (partial) | 2 (correct) | 3 (thorough).
 
-**Weights:**
-- Deep dive: 25%
-- Coding: 25%
-- Architecture: 20%
-- Failures: 15%
-- Trade-offs: 10%
-- Overview: 5%
-- Reflection: 10%
+Two question families have their own rubric and should be scored from it, not
+from feel:
+
+- **Module depth** (`explanation-module-depth-v1`) — the "if you deleted this,
+  what would break?" questions. The graph's `relationships` already contain the
+  importers, so an answer that invents dependencies is wrong, not vague.
+- **Diagnosis** (`failure-diagnosis-v1`) — "how would you find the cause?"
+  questions, scored on the discipline: a red-capable loop, minimisation, ranked
+  falsifiable hypotheses, one-variable instrumentation, a regression test at a
+  real seam. An answer that jumps to a fix without a loop scores 0 on the first
+  concept no matter how plausible the guess is.
+
+**Who scores: the agent, not the script.** Read the rubric's `scoring_levels`
+and assign each concept yourself. `assess.py answer` contains a keyword
+fallback that tags the session `scored_by: heuristic` — treat those numbers as
+a smoke signal only, and replace them with the authoritative scores:
+
+```bash
+python scripts/save_progress.py <repo-root> update <session-id> \
+  --score <question-id> <concept> <0-3>
+```
+
+Questions that carry no scores are **not** counted as zero; they are reported
+under `categories.<name>.unscored`. Before quoting an overall score, check that
+`unscored` is empty and `heuristic_scored` is 0 — otherwise the number reflects
+the measuring instrument, not the candidate.
+
+**Weights** (authoritative source: `scripts/score_report.py`; `check_docs.py` fails
+if this list and the code disagree):
+
+- Architecture: 15% -- fed by the Overview and Deep Dive rounds
+- Core Implementation: 20% -- fed by the Deep Dive round
+- Independent Coding: 30% -- fed by the Coding round and practice challenges
+- Debugging/Failure: 15% -- fed by the Failures round
+- Trade-offs: 10% -- fed by the Trade-offs round
+- Security/Reliability: 10% -- fed by any round that scores auth, validation or
+  reliability concepts
+
+The Reflection round is **not** weighted: self-assessment moves the number without
+measuring knowledge, so it goes into the report's growth section instead.
 
 **Record scores** in a temporary object for Phase 10.
 
@@ -244,7 +292,15 @@ Each rubric concept: 0 (missing) | 1 (partial) | 2 (correct) | 3 (thorough).
    - [ ] Medium: [...]
    - [ ] Low: [...]
 5. **Unverified Items** (from graph uncertainties -- user must clarify)
+6. **Scoring Reliability** -- copy `score_reliability` from the score file:
+   - `agent-scored`: every graded answer was scored against a rubric, quote the score freely.
+   - `heuristic-only` / `mixed`: say so explicitly. Do not present a keyword-matched
+     score as a verdict; re-score the answers against each rubric's `scoring_levels`
+     and record them with `save_progress.py update ... --score` first.
 6. **Rebuild Challenge Result** (if attempted: pass/fail, notes)
+7. **Review Schedule** -- run `scripts/plan_review.py <repo_root> --write` and
+   link `.project-defense/review-plan.md`. State the next review date per
+   weak concept, and do not schedule anything for tomorrow that scored 3/3.
 
 ### Example Next Step Format
 ```markdown
