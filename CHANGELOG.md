@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- (nothing yet)
+
+## [0.6.0] - 2026-11-25
+
+### Added
 - **`templates/readiness-report.md`.** Phase 10 was the only phase with no template, so every report was improvised. The template forces coverage next to the score, a file pointer on every gap, and a reliability label.
 - **Coverage-aware scoring.** `score_report.py` now returns `weight_covered` and `assessed_categories`, and marks each category `assessed`. A category nobody asked about is no longer a zero: it is excluded from the overall score and from `gaps`, and the overall is renormalised over the categories that were actually graded. Dry run on the Django example: 0.225 "score" (four categories silently zeroed) became 0.75 over 0.30 of the rubric -- the same answers, read honestly.
 - **Hand-scored answers are labelled as such.** `save_progress.py update --score` sets `scored_by: agent`, so a session graded by an agent is reported as `agent-scored` instead of `heuristic-only` with a warning telling the user to distrust it.
