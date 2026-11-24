@@ -16,10 +16,16 @@ the generated question bank is project-specific in all four:
 
 | Project | Routes | Protected routes | Questions |
 |---|---|---|---|
-| example-todo-app | 7 | 4 | 17 |
-| example-django-blog | 15 | 12 | 9 |
-| example-fastapi-tasks | 7 | 4 | 10 |
+| example-todo-app | 7 | 4 | 18 |
+| example-django-blog | 15 | 12 | 12 |
+| example-fastapi-tasks | 7 | 4 | 11 |
 | example-nextjs-todo | 4 | 0 | 9 |
+
+Counts are from `scripts/generate_question_bank.py` at the current detectors. The
+Django project asks more because its stack names three technologies
+(`Django REST Framework`, `Django`, `PostgreSQL`) and a stack-pair trade-off and a
+database trade-off question are both generated; the todo app's Mongoose stack is
+one entry, so it gets the database question instead.
 
 ## What "full" vs "partial" means
 

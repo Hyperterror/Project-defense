@@ -425,6 +425,24 @@ def gen_failure_questions(graph: dict, rubrics_map: dict) -> list:
     return questions
 
 
+DB_STACK_TOKENS = (
+    "mongo", "postgres", "mysql", "sqlite", "mariadb", "dynamo", "cassandra",
+    "redis", "supabase", "firestore", "cockroach", "oracle",
+)
+
+
+def _database_of(graph: dict) -> str:
+    """The database entry of `project.stack`, or "" when none is recognisable.
+
+    The graph records the stack as human labels ("MongoDB (Mongoose)"), so the
+    database is identified by token rather than by a dedicated field.
+    """
+    for entry in graph.get("project", {}).get("stack", []) or []:
+        if any(token in entry.lower() for token in DB_STACK_TOKENS):
+            return entry
+    return ""
+
+
 def gen_tradeoff_questions(graph: dict, rubrics_map: dict) -> list:
     """One per stack technology pair + one per auth strategy choice."""
     questions = []
@@ -445,6 +463,27 @@ def gen_tradeoff_questions(graph: dict, rubrics_map: dict) -> list:
                 "project_references": [],
             })
             idx += 1
+
+    # The database choice is its own interview: document vs relational is the
+    # decision a candidate is most often asked to defend, and no stack-pair
+    # question above covers it.
+    database = _database_of(graph)
+    if database:
+        text = (
+            f"You use {database}. What did that choice cost you compared with the "
+            f"other main option, what would force you to migrate, and what in your "
+            f"schema depends on it?"
+        )
+        qid = f"q-t{idx:03d}"
+        questions.append({
+            "id": qid,
+            "category": "trade_off",
+            "text": text,
+            "rubric_id": _rubric_for(rubrics_map, qid, "trade_off", text),
+            "difficulty": "hard",
+            "project_references": [],
+        })
+        idx += 1
 
     auth_strategy = graph.get("auth", {}).get("strategy", "")
     if auth_strategy and auth_strategy != "none":

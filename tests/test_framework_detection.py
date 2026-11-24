@@ -274,6 +274,41 @@ class TestGraphMergesFrameworks(TempRepo):
         self.assertIn("GET /tasks", [r["name"] for r in auth["protected_routes"]])
 
 
+class TestDatabaseTradeOffQuestion(unittest.TestCase):
+    """The database choice gets its own trade-off question, like the stack does."""
+
+    def _graph(self, stack):
+        return {
+            "project": {"stack": stack},
+            "auth": {"strategy": "JWT", "protected_routes": []},
+        }
+
+    def test_database_trade_off_is_asked(self):
+        graph = self._graph(["Express", "MongoDB (Mongoose)"])
+        questions = gqb.gen_tradeoff_questions(graph, gqb._load_rubrics())
+        texts = [q["text"] for q in questions]
+        db_questions = [t for t in texts if "MongoDB" in t]
+        self.assertEqual(len(db_questions), 1, texts)
+        self.assertIn("force you to migrate", db_questions[0])
+
+    def test_database_question_selects_the_stack_rubric(self):
+        graph = self._graph(["Express", "MongoDB (Mongoose)"])
+        questions = gqb.gen_tradeoff_questions(graph, gqb._load_rubrics())
+        db_question = [q for q in questions if "MongoDB" in q["text"]][0]
+        self.assertEqual(
+            db_question["rubric_id"], "trade-off-stack-v1",
+            "A database question must not be graded by the generic stack rubric",
+        )
+
+    def test_no_database_in_the_stack_means_no_question(self):
+        graph = self._graph(["Express", "React"])
+        questions = gqb.gen_tradeoff_questions(graph, gqb._load_rubrics())
+        self.assertFalse(
+            [q for q in questions if "migrate" in q["text"]],
+            "No database detected means no database question",
+        )
+
+
 class TestCodingQuestionGrouping(unittest.TestCase):
     def _graph(self):
         def route(method, path, handler):

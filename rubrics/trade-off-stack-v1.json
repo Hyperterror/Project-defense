@@ -1,6 +1,6 @@
 {
   "id": "trade-off-stack-v1",
-  "question_id": "q-t001",
+  "question_id": "generic",
   "category": "trade_off",
   "expected_concepts": [
     "document-model-fit",
@@ -41,10 +41,16 @@
     "What would have to change in the schema to migrate later?"
   ],
   "topic": [
-    "stack",
     "database",
+    "mongo",
     "mongodb",
     "postgres",
-    "mongo"
+    "postgresql",
+    "mysql",
+    "sqlite",
+    "relational",
+    "document store",
+    "schema",
+    "migrate"
   ]
 }

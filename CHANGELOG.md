@@ -12,6 +12,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Hand-scored answers are labelled as such.** `save_progress.py update --score` sets `scored_by: agent`, so a session graded by an agent is reported as `agent-scored` instead of `heuristic-only` with a warning telling the user to distrust it.
 - **`score_reliability` and `weight_covered` in `assessment-result.schema.json`.**
 
+- **A database trade-off question.** The stack-pair questions ("why X over the alternative") never covered the data store, so `trade-off-stack-v1` was shipped but unreachable: no generated question mentioned the database. The bank now asks it when `project.stack` names one (`_database_of`, token match over 14 engines), and the todo fixture routes it to the specific rubric.
+- **Widened `trade-off-stack-v1` topics** to the engine names the bank actually emits (postgres/mysql/sqlite/relational/document store/schema/migrate), and unbound it from `q-t001`.
+
 ### Fixed
 - **Silent concept-name typos in `--score`.** `save_progress.py update <session> --score q-t003 "trade-off reasoning" 3` accepted the invented concept and averaged it into the question, quietly changing the score. The command now resolves the question's rubric and exits with the valid concept names.
 - **Keyword-fallback scores no longer mix with rubric scores.** When an agent records a score for a question, the heuristic values from `assess.py` are dropped for that question: averaging two instruments in one number is what made the dry-run score meaningless.
