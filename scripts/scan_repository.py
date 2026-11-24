@@ -220,7 +220,9 @@ def detect_framework(deps: List[str], root: Path) -> Dict[str, Any]:
         result["backend"].append("Flask")
     if any("fastapi" in d for d in dep_lower):
         result["backend"].append("FastAPI")
-    if any("django" in d for d in dep_lower):
+    if any("djangorestframework" in d or d == "django-rest-framework" for d in dep_lower):
+        result["backend"].append("Django REST Framework")
+    if any(d == "django" or d.startswith("django>") or d.startswith("django=") for d in dep_lower):
         result["backend"].append("Django")
 
     # Database
@@ -234,6 +236,8 @@ def detect_framework(deps: List[str], root: Path) -> Dict[str, Any]:
         result["database"].append("TypeORM")
     if any("sqlalchemy" in d for d in dep_lower):
         result["database"].append("SQLAlchemy")
+    if any("psycopg" in d or "asyncpg" in d for d in dep_lower):
+        result["database"].append("PostgreSQL (psycopg)")
     if any("pg" == d or "pg@" in d for d in dep_lower):
         result["database"].append("PostgreSQL (pg)")
     if any("mysql" in d for d in dep_lower):
@@ -256,25 +260,56 @@ def detect_framework(deps: List[str], root: Path) -> Dict[str, Any]:
         result["testing"].append("Supertest")
 
     # Auth
-    if any("jsonwebtoken" in d or "jose" in d for d in dep_lower):
+    if any("jsonwebtoken" in d or "jose" in d or "pyjwt" in d for d in dep_lower):
         result["other"].append("JWT")
     if any("bcrypt" in d for d in dep_lower):
         result["other"].append("bcrypt")
+    if any("passlib" in d for d in dep_lower):
+        result["other"].append("passlib")
     if any("passport" in d for d in dep_lower):
         result["other"].append("Passport.js")
+    if any("supabase" in d for d in dep_lower):
+        result["other"].append("Supabase")
+    if any("cors-headers" in d or "cors" == d for d in dep_lower):
+        result["other"].append("CORS")
+    if any("dotenv" in d for d in dep_lower):
+        result["other"].append("dotenv")
 
     return result
 
 
 def extract_env_vars(content: str) -> List[str]:
+    """Names of environment variables read by JS or Python code.
+
+    All four access styles are common and none of them is rarer than another,
+    so a project using `os.environ.get` must not report zero variables.
+    """
     vars_found = set()
     for match in re.finditer(r"process\.env\.([A-Z_][A-Z0-9_]*)", content):
         vars_found.add(match.group(1))
-    for match in re.finditer(r"os\.getenv\(['\"]([A-Z_][A-Z0-9_]*)['\"]\)", content):
-        vars_found.add(match.group(1))
-    for match in re.finditer(r"os\.environ\[['\"]([A-Z_][A-Z0-9_]*)['\"]\]", content):
-        vars_found.add(match.group(1))
+    for pattern in (
+        r"os\.getenv\(\s*['\"]([A-Z_][A-Z0-9_]*)['\"]",
+        r"os\.environ\.get\(\s*['\"]([A-Z_][A-Z0-9_]*)['\"]",
+        r"os\.environ\.setdefault\(\s*['\"]([A-Z_][A-Z0-9_]*)['\"]",
+        r"os\.environ\[\s*['\"]([A-Z_][A-Z0-9_]*)['\"]\s*\]",
+    ):
+        for match in re.finditer(pattern, content):
+            vars_found.add(match.group(1))
     return sorted(vars_found)
+
+
+# Keys declared in a .env file, e.g. `POSTGRES_HOST=localhost` or
+# `export POSTGRES_HOST=localhost`. Values are ignored on purpose: env files
+# are where the secrets live, and only the names are useful to the analysis.
+RE_ENV_FILE_KEY = re.compile(
+    r"^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*=", re.MULTILINE
+)
+ENV_FILE_NAMES = (".env", ".env.example", ".env.sample", ".env.local", ".env.template")
+
+
+def extract_env_file_keys(content: str) -> List[str]:
+    """Environment variable names declared in a .env file (values not read)."""
+    return sorted({m.group(1) for m in RE_ENV_FILE_KEY.finditer(content)})
 
 
 def _iter_dirs(root: Path, patterns: Optional[List[str]] = None) -> List[Path]:
@@ -381,10 +416,13 @@ def scan_repository(root: Path) -> Dict[str, Any]:
             readme_path = str(path.relative_to(root))
             break
 
-    # Env vars from code
+    # Env vars from code and from .env files (names only, never values)
     env_vars = set()
     for path in walk_source_files(root, [".js", ".ts", ".jsx", ".tsx", ".py"], ignore_patterns):
         env_vars.update(extract_env_vars(read_text(path)))
+    for path in walk_files(root, ignore_patterns):
+        if path.name.lower() in ENV_FILE_NAMES:
+            env_vars.update(extract_env_file_keys(read_text(path)))
 
     # Run commands from package.json
     run_commands = {}

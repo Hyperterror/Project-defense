@@ -129,6 +129,73 @@ class TestProgress(unittest.TestCase):
         loaded = sp.load_session(sessions_dir, session_id)
         self.assertEqual(loaded["status"], original_status, "Failed write must not corrupt existing file")
 
+    def test_rubric_concepts_lists_the_real_names(self):
+        """A known rubric resolves to its concepts; an unknown id resolves to none."""
+        self.assertIn(
+            "password-verification",
+            sp.rubric_concepts("explanation-auth-v1"),
+        )
+        self.assertEqual(sp.rubric_concepts("does-not-exist"), [])
+        self.assertEqual(sp.rubric_concepts(""), [])
+
+
+class TestScoreCli(unittest.TestCase):
+    """The --score command must refuse concept names the rubric does not define."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="pdc-score-cli-"))
+        defense_dir = self.tmpdir / ".project-defense"
+        defense_dir.mkdir()
+        (defense_dir / "project-graph.json").write_text(
+            json.dumps({"session_identity": "identity-A"}),
+            encoding="utf-8",
+        )
+        sessions_dir = sp._sessions_dir(self.tmpdir)
+        self.session_id = sp._make_session_id("identity-A", "2024-01-01T00:00:00+00:00")
+        session = sp.create_session(sessions_dir, self.session_id, "identity-A", "assessment")
+        session["questions"] = [{
+            "question_id": "q-e002",
+            "rubric_id": "explanation-auth-v1",
+            "answer": "some answer",
+            "scores": {"request-lifecycle": 1, "credential-issuance": 1},
+            "scored_by": "heuristic",
+        }]
+        sp.update_session(sessions_dir, self.session_id, {"questions": session["questions"]})
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _run(self, *args):
+        import subprocess
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS_DIR / "save_progress.py"), str(self.tmpdir)]
+            + list(args),
+            capture_output=True, text=True,
+        )
+
+    def _question(self):
+        session = sp.load_session(sp._sessions_dir(self.tmpdir), self.session_id)
+        return next(q for q in session["questions"] if q["question_id"] == "q-e002")
+
+    def test_unknown_concept_exits_with_the_valid_names(self):
+        result = self._run("update", self.session_id, "--score", "q-e002", "trade-off reasoning", "3")
+        self.assertNotEqual(result.returncode, 0, "A concept the rubric does not define must be refused")
+        self.assertIn("password-verification", result.stderr + result.stdout,
+                      "The error must list the concepts that are valid")
+        self.assertEqual(self._question()["scores"].get("trade-off reasoning"), None,
+                         "A refused score must not be written")
+
+    def test_agent_score_replaces_heuristic_values(self):
+        result = self._run("update", self.session_id, "--score", "q-e002", "password-verification", "3")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        question = self._question()
+        self.assertEqual(question["scored_by"], "agent")
+        self.assertEqual(
+            question["scores"], {"password-verification": 3},
+            "Recording a rubric score must clear the keyword fallback values, "
+            "which measured a different thing",
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

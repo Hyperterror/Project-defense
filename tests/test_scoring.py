@@ -59,7 +59,7 @@ class TestScoring(unittest.TestCase):
     def test_all_correct_yields_one(self):
         """Every concept scored 3 across ALL 6 categories -> overall_score == 1.0."""
         questions = [
-            _q("q-e001", "explanation", {"request-lifecycle": 3, "jwt-generation": 3}),
+            _q("q-e001", "explanation", {"request-lifecycle": 3, "credential-issuance": 3}),
             _q("q-c001", "core_implementation", {"impl": 3, "edge-cases": 3}),
             _q("q-c002", "independent_coding", {"impl": 3, "tests": 3}),
             _q("q-f001", "failure_scenario", {"crash-vs-retry": 3, "graceful-degradation": 3}),
@@ -74,7 +74,7 @@ class TestScoring(unittest.TestCase):
     def test_all_zero_yields_zero(self):
         """Every concept scored 0 -> overall_score == 0.0."""
         questions = [
-            _q("q-e001", "explanation", {"request-lifecycle": 0, "jwt-generation": 0}),
+            _q("q-e001", "explanation", {"request-lifecycle": 0, "credential-issuance": 0}),
             _q("q-f001", "failure_scenario", {"crash-vs-retry": 0, "graceful-degradation": 0}),
         ]
         session = _make_session(questions)
@@ -92,14 +92,43 @@ class TestScoring(unittest.TestCase):
         # Independent Coding contributes 0.3333 * 0.30 = 0.10
         # expected overall = 0.20
         questions = [
-            _q("q-e001", "explanation", {"request-lifecycle": 3, "jwt-generation": 1}),
+            _q("q-e001", "explanation", {"request-lifecycle": 3, "credential-issuance": 1}),
             _q("q-c001", "coding_task", {"implementation": 2, "edge-cases": 0}),
         ]
         session = _make_session(questions)
         result = sr.compute_scores(session)
-        expected = ( (3 + 1) / 2 / 3 ) * 0.15 + ( (2 + 0) / 2 / 3 ) * 0.30
+        architecture = ((3 + 1) / 2 / 3) * 0.15
+        coding = ((2 + 0) / 2 / 3) * 0.30
+        covered = 0.15 + 0.30
+        # The overall is renormalised over the categories that were assessed:
+        # the four never asked about must not count as zeros.
+        expected = (architecture + coding) / covered
         self.assertAlmostEqual(result["overall_score"], expected, places=4,
                               msg=f"Expected {expected}, got {result['overall_score']}")
+        self.assertAlmostEqual(result["weight_covered"], covered, places=4)
+
+    def test_unassessed_categories_are_not_gaps(self):
+        """A category nobody asked about is missing coverage, not a failure."""
+        session = _make_session([
+            _q("q-e001", "explanation", {"request-lifecycle": 3, "credential-issuance": 3}),
+        ])
+        result = sr.compute_scores(session)
+        self.assertEqual(result["assessed_categories"], ["Architecture"])
+        self.assertEqual(result["gaps"], [])
+        self.assertAlmostEqual(result["overall_score"], 1.0, places=5)
+        self.assertAlmostEqual(result["weight_covered"], 0.15, places=5)
+        self.assertFalse(result["categories"]["Independent Coding"]["assessed"])
+
+    def test_partial_answer_within_a_category_is_unscored_not_zero(self):
+        """An answered question with no scores must not drag the category down."""
+        session = _make_session([
+            _q("q-e001", "explanation", {"a": 3, "b": 3}),
+            {"question_id": "q-e002", "category": "explanation", "answer": "text",
+             "scores": {}},
+        ])
+        result = sr.compute_scores(session)
+        self.assertAlmostEqual(result["categories"]["Architecture"]["score"], 1.0, places=5)
+        self.assertEqual(result["categories"]["Architecture"]["unscored"], ["q-e002"])
 
     def test_deterministic(self):
         """Same input gives identical output (excluding generated_at)."""

@@ -162,16 +162,16 @@ def compute_scores(session: dict) -> dict:
     strengths = []
     gaps = []
 
+    covered_weight = 0.0
     for cat, weight in CATEGORY_WEIGHTS.items():
         data = category_totals[cat]
-        if data["count"] > 0:
-            cat_score = data["total"] / data["count"]
-        else:
-            cat_score = 0.0
+        assessed = data["count"] > 0
+        cat_score = data["total"] / data["count"] if assessed else 0.0
 
         categories[cat] = {
             "score": round(cat_score, 6),
             "weight": weight,
+            "assessed": assessed,
             "passed": data["passed"],
             "failed": data["failed"],
             "scored_count": data["count"],
@@ -179,16 +179,24 @@ def compute_scores(session: dict) -> dict:
             "unscored": data["unscored"],
         }
 
-        overall += cat_score * weight
+        if assessed:
+            covered_weight += weight
+            overall += cat_score * weight
+            (strengths if cat_score >= 0.5 else gaps).append(cat)
+        # A category with nothing scored is *not* a zero: the interview has not
+        # asked about it yet. It is excluded from the overall and from gaps, and
+        # `weight_covered` says how much of the rubric the number rests on.
 
-        if cat_score >= 0.5:
-            strengths.append(cat)
-        else:
-            gaps.append(cat)
+    # Renormalise over the categories that were actually assessed, so a partial
+    # session reports the score it earned rather than the score it failed to.
+    if covered_weight > 0:
+        overall = overall / covered_weight
 
     return {
         "session_id": session.get("session_id", ""),
         "overall_score": round(overall, 6),
+        "weight_covered": round(covered_weight, 6),
+        "assessed_categories": sorted(k for k, v in categories.items() if v["assessed"]),
         "categories": categories,
         "strengths": strengths,
         "gaps": gaps,

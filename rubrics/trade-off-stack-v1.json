@@ -1,6 +1,7 @@
 {
   "id": "trade-off-stack-v1",
   "question_id": "q-t001",
+  "category": "trade_off",
   "expected_concepts": [
     "document-model-fit",
     "scalability-claims",

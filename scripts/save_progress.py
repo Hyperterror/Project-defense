@@ -47,6 +47,9 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+RUBRICS_DIR = SCRIPT_DIR.parent / "rubrics"
+
 
 VALID_MODES = {"assessment", "interview", "practice"}
 VALID_STATUSES = {"active", "completed", "abandoned"}
@@ -169,6 +172,25 @@ def _make_session_id(session_identity: str, created_at: str) -> str:
 # -----------------------------------------------------------------------
 
 
+def rubric_concepts(rubric_id: str) -> list:
+    """Expected concept names for a rubric, or [] when it cannot be resolved.
+
+    Scoring a concept that the rubric does not define silently changes the
+    question's average, so a typo has to be caught here rather than discovered
+    in a weighted score later.
+    """
+    if not rubric_id:
+        return []
+    for path in sorted(RUBRICS_DIR.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("id") == rubric_id:
+            return list(data.get("expected_concepts") or [])
+    return []
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Manage .project-defense/sessions/ files.",
@@ -254,7 +276,23 @@ def main():
                     "category": "",
                 }
                 questions.append(q_entry)
+            expected = rubric_concepts(q_entry.get("rubric_id", ""))
+            if expected and concept not in expected:
+                sys.exit(
+                    "Error: '%s' is not a concept of rubric '%s'.\n"
+                    "Valid concepts: %s"
+                    % (concept, q_entry.get("rubric_id", ""), ", ".join(expected))
+                )
+            if q_entry.get("scored_by") == "heuristic":
+                # The keyword fallback already put numbers here. Keeping them
+                # next to rubric-scored values would average two different
+                # instruments, so the agent's judgement replaces them.
+                q_entry["scores"] = {}
             q_entry.setdefault("scores", {})[concept] = score_val
+            # A score typed here came from an agent reading the rubric, not from
+            # the keyword fallback. Without this the report calls a hand-scored
+            # session "heuristic-only" and tells the user to distrust it.
+            q_entry["scored_by"] = "agent"
             session["questions"] = questions
             update_session(sessions_dir, args.session_id, {"questions": questions})
             print(f"Score {score_val} recorded for concept '{concept}' in question '{q_id}'.")

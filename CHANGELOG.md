@@ -7,6 +7,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`templates/readiness-report.md`.** Phase 10 was the only phase with no template, so every report was improvised. The template forces coverage next to the score, a file pointer on every gap, and a reliability label.
+- **Coverage-aware scoring.** `score_report.py` now returns `weight_covered` and `assessed_categories`, and marks each category `assessed`. A category nobody asked about is no longer a zero: it is excluded from the overall score and from `gaps`, and the overall is renormalised over the categories that were actually graded. Dry run on the Django example: 0.225 "score" (four categories silently zeroed) became 0.75 over 0.30 of the rubric -- the same answers, read honestly.
+- **Hand-scored answers are labelled as such.** `save_progress.py update --score` sets `scored_by: agent`, so a session graded by an agent is reported as `agent-scored` instead of `heuristic-only` with a warning telling the user to distrust it.
+- **`score_reliability` and `weight_covered` in `assessment-result.schema.json`.**
+
+### Fixed
+- **Silent concept-name typos in `--score`.** `save_progress.py update <session> --score q-t003 "trade-off reasoning" 3` accepted the invented concept and averaged it into the question, quietly changing the score. The command now resolves the question's rubric and exits with the valid concept names.
+- **Keyword-fallback scores no longer mix with rubric scores.** When an agent records a score for a question, the heuristic values from `assess.py` are dropped for that question: averaging two instruments in one number is what made the dry-run score meaningless.
+- **Rubric topic ties resolved by specificity.** A deletion-test question about an auth module matched both `explanation-auth-v1` ("auth") and `explanation-module-depth-v1` ("deleted"); counting hits left it to alphabetical order. The best match is now the one with the most keywords, then the longest (most specific) one.
+- **`explanation-auth-v1` assumed bcrypt.** Its concepts named `jwt-generation` and `bcrypt-comparison`, so a Django project that uses `authenticate()` and a JWT library scored 0 for not being an Express/bcrypt app. Concepts are now stack-neutral (`credential-issuance`, `password-verification`) with levels that name each stack's own call.
+- `save_progress.py` no longer binds a rubric to a question id: `explanation-auth-v1` was pinned to `q-e001`, which its own topic keywords could not select.
+
+### Changed
 - **Route extraction for four more frameworks.** `detect_code_facts.py` now finds routes in FastAPI/Flask (decorators, `APIRouter(prefix=...)`), Django (`path()`/`re_path()` with `include()` chains resolved into full paths, DRF `router.register(...)` expanded into its real actions) and Next.js (`app/api/**/route.ts` exports, `pages/api/**` method branches). Previously only Express was recognised, so a Django, FastAPI or Next.js project produced no routes at all and its question bank collapsed to 5-7 generic questions. Now: Django 5 -> 9, FastAPI 6 -> 10, Next.js 7 -> 9, and each with project-specific questions instead of filler.
 - **Protected-route detection per framework.** FastAPI `Depends(get_current_user)` and DRF `permission_classes = [IsAuthenticated]` now mark routes as protected, joining Express mount prefixes. Django example: 12 of 15 routes.
 - **Python and delegated auth signals.** jose/PyJWT, passlib/bcrypt, Django `authenticate`/`login`/`@login_required`, DRF permission classes, and JS providers (Supabase SSR, NextAuth/Auth.js) are all read, so `auth.strategy` is no longer `other` for those stacks (delegated providers resolve to `cookie`).

@@ -1,6 +1,7 @@
 {
   "id": "failure-scenario-db-v1",
   "question_id": "q-f001",
+  "category": "failure_scenario",
   "expected_concepts": [
     "crash-vs-retry",
     "graceful-degradation",

@@ -160,10 +160,22 @@ def _rubric_for(rubrics_map: dict, question_id: str, category: str,
     text = (question_text or "").lower()
 
     def _matches(candidates):
+        """Best topic match: most keywords, then the longest (most specific) one.
+
+        Counting alone is not enough -- "deleted" and "auth" both appear once in
+        a deletion test about an auth module, and the module-depth rubric is the
+        one that fits. A longer keyword is the stronger signal, and ties stay
+        deterministic because `candidates` is in sorted file order.
+        """
+        best_id, best_score = None, None
         for rubric_id, topics in candidates:
-            if topics and any(t in text for t in topics):
-                return rubric_id
-        return None
+            hits = [topic for topic in (topics or []) if topic in text]
+            if not hits:
+                continue
+            score = (len(hits), max(len(hit) for hit in hits))
+            if best_score is None or score > best_score:
+                best_id, best_score = rubric_id, score
+        return best_id
 
     specific = _matches(rubrics_map.get(question_id) or [])
     if specific:
@@ -236,11 +248,13 @@ def gen_explanation_questions(graph: dict, rubrics_map: dict) -> list:
         guard_clause = (
             " The guard applied is `%s`." % guards[0] if guards else ""
         )
+        # The wording names authentication on purpose: it is what the answer
+        # is about, and it is what routes the question to the auth rubric.
         text = (
-            "Your API has %d protected route(s) -- %s.%s Walk me through how a "
-            "request to one of them proves who the caller is: where the "
-            "credential is read, where it is verified, what object the identity "
-            "becomes in the handler, and what the caller sees when it fails."
+            "Your API has %d protected route(s) -- %s.%s Walk me through how "
+            "authentication works for one of them: where the credential is "
+            "read, where it is verified, what the identity becomes inside the "
+            "handler, and what the caller sees when verification fails."
             % (len(protected), examples, guard_clause)
         )
         qid = f"q-e{idx:03d}"

@@ -281,10 +281,13 @@ measuring knowledge, so it goes into the report's growth section instead.
 
 ## Phase 10: Readiness Report
 
-**Create `.project-defense/readiness-report.md`.**
+**Create `.project-defense/readiness-report.md` from `templates/readiness-report.md`.**
 
 ### Contents
-1. **Overall Score** (0-100, weighted)
+1. **Overall Score** — quote `overall_score` **with `weight_covered`**. The score is
+   renormalised over the categories that were actually assessed, so an 0.80 after
+   three of eleven questions means "80% of what was asked", not "80% ready".
+   Below 0.6 coverage, say so in the same sentence.
 2. **Strengths** (top 3 segments/concepts with scores)
 3. **Critical Gaps** (any concept < 1.5/3 -- list with file references from graph)
 4. **Next Steps** (priority ordered):
@@ -297,7 +300,7 @@ measuring knowledge, so it goes into the report's growth section instead.
    - `heuristic-only` / `mixed`: say so explicitly. Do not present a keyword-matched
      score as a verdict; re-score the answers against each rubric's `scoring_levels`
      and record them with `save_progress.py update ... --score` first.
-6. **Rebuild Challenge Result** (if attempted: pass/fail, notes)
+8. **Rebuild Challenge Result** (if attempted: pass/fail, notes)
 7. **Review Schedule** -- run `scripts/plan_review.py <repo_root> --write` and
    link `.project-defense/review-plan.md`. State the next review date per
    weak concept, and do not schedule anything for tomorrow that scored 3/3.
