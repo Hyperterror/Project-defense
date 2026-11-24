@@ -93,16 +93,49 @@ of the workflow against the extracted copy.
 
 ## Supported Stacks
 
-| Stack | Routes | Auth | Models | Status |
-|-------|--------|------|--------|--------|
-| **React + Node/Express + MongoDB** | Express `app.get(...)`, `router.use(...)` mounts | JWT, bcrypt | Mongoose | **Fully supported** |
-| **Django + DRF + PostgreSQL** | URLconf `path()` + `include()` chains, DRF routers | Django auth, DRF permissions | Django ORM | **Supported** |
-| **FastAPI / Flask + SQL** | Decorators, `APIRouter(prefix=...)`, `Depends(...)` guards | jose/PyJWT, passlib | SQLAlchemy | **Supported** |
-| **Next.js + Supabase** | `app/api/**/route.ts` and `pages/api/**` | Supabase SSR / NextAuth cookies | Supabase (client calls only) | **Supported** |
-| React Native + Firebase | — | — | — | Experimental |
+Two tiers. Both produce evidence for every claim; they differ in how much of the
+framework's routing model the detector understands.
 
-"Supported" means routes, auth strategy and models are extracted with evidence,
-so question generation and practice challenges work without manual reading.
+### Tier 1 — framework-aware
+
+The detector knows how the framework composes routes, so it resolves prefixes,
+mounts, routers and permission classes rather than pattern-matching each line.
+
+| Stack | Routes | Auth | Models |
+|-------|--------|------|--------|
+| **React + Node/Express + MongoDB** | `app.get(...)`, `router.use(...)` mounts | JWT, bcrypt | Mongoose |
+| **Django + DRF + PostgreSQL** | URLconf `path()` + `include()` chains, DRF routers | Django auth, DRF permissions | Django ORM |
+| **FastAPI / Flask + SQL** | Decorators, `APIRouter(prefix=...)`, `Depends(...)` guards | jose/PyJWT, passlib | SQLAlchemy |
+| **Next.js + Supabase** | `app/api/**/route.ts` and `pages/api/**` | Supabase SSR / NextAuth cookies | Supabase (client calls only) |
+
+### Tier 2 — pattern packs
+
+`scripts/detect_stack_generic.py` carries one pack per ecosystem. Each pack reads
+that ecosystem's route, model and auth idioms and resolves the prefixes that
+change a path: Gin `r.Group("/api")`, Rails `namespace :api do`,
+Laravel `Route::prefix(...)`, ASP.NET `[Route("api/[controller]")]`.
+
+| Ecosystem | Routes recognised | Models | Auth signals |
+|---|---|---|---|
+| **Go** | Gin/Echo/Chi/Fiber `r.GET(...)`, `http.HandleFunc`, `r.Method(...)` | GORM structs + field types | golang-jwt, bcrypt, argon2, auth middleware |
+| **Ruby** | `routes.rb` verbs, `namespace`, `resources` (expanded), Sinatra | ActiveRecord models + associations | `has_secure_password`, Devise, `authenticate_user!` |
+| **PHP** | Laravel `Route::get/post/...`, `apiResource` (expanded), prefix groups, Slim | Eloquent `$fillable` | Sanctum, Passport, `Hash::make`, `->middleware('auth')` |
+| **Java** | Spring `@RequestMapping` + `@Get/PostMapping`, class-level prefixes | JPA `@Entity` | Spring Security, `@PreAuthorize`, `BCryptPasswordEncoder` |
+| **C#** | ASP.NET `[Route]` + `[HttpGet]`, `[controller]` placeholder, minimal APIs | — | `[Authorize]`, JwtBearer, Identity |
+| **Rust** | Axum `.route("/x", get(h))`, Actix `#[get("/x")]` | — | `jsonwebtoken`, argon2 |
+| **Kotlin** | Ktor `get("/x") { }` | — | jwt, `authenticate(...)` |
+| **Elixir** | Phoenix `get "/x", C, :action`, `resources` | Ecto `schema` | Guardian, Phoenix.Token |
+| **Prisma** | — | `model X { ... }` with field types | — |
+
+### Everything else
+
+Any repository still gets an interview: the scan counts languages, reads the
+manifests it understands, and generates questions about auth, failure diagnosis
+and trade-offs. What it will not do is pretend. When no route and no model is
+found, the graph records an uncertainty — *"Which framework serves this API, and
+which file defines its first route?"* — the question bank warns that every
+question is generic, and Phase 4 asks you before anything is written.
+
 What stays manual everywhere: the service/controller layer, user flows and data
 flows. The agent marks those UNVERIFIED and asks you rather than inventing them.
 
@@ -191,7 +224,9 @@ project-defense-skill/
 │   ├── validate_graph.py              # JSON Schema validator for project-graph.json
 │   ├── check_graph_freshness.py       # Is the graph still at git HEAD? Exit 1 when stale
 │   ├── fetch_repository.py            # Fetch a public GitHub repo to a temp dir (stdlib)
-│   ├── save_corrections.py            # Read/write .project-defense/corrections.json
+│   ├── save_corrections.py            # Record a Phase 4 decision (id shape is validated)
+│   ├── apply_corrections.py           # Re-apply corrections.json into the graph on every rebuild
+│   ├── detect_stack_generic.py        # Route/model/auth packs for Go, Ruby, PHP, Java, C#, Rust, Kotlin, Elixir
 │   ├── score_report.py                # Weighted scoring of a session against the 6-category rubric weights
 │   ├── validate_mermaid.py            # Structural validator for .mmd diagram files
 │   ├── generate_challenge.py          # Create a challenge manifest + starter files (Python, JS, JSX, TS, TSX)

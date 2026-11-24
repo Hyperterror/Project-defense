@@ -9,6 +9,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - (nothing yet)
 
+## [0.7.0] - 2026-11-25
+
+### Added
+- **Global coverage: five more language ecosystems.** `scripts/detect_stack_generic.py` carries one pattern pack per ecosystem and extracts routes, models and auth signals with the same evidence shape as the dedicated detectors (`file`, `lines`, `excerpt`, `status`). Go (Gin/Echo/Chi/Fiber/net-http, GORM structs with field types), Ruby (Rails `routes.rb`, Sinatra, ActiveRecord associations), PHP (Laravel routes and `apiResource`, Slim, Eloquent `$fillable`), Java (Spring class + method mappings, JPA entities), C# (ASP.NET controllers, `[controller]` placeholder, minimal APIs), plus Rust (Axum, Actix), Kotlin (Ktor), Elixir (Phoenix) and Prisma schemas.
+- **Prefix resolution, not just line matching.** Gin `r.Group("/api")`, Rails `namespace :api do` (nested, composing), Laravel `Route::prefix(...)` groups and ASP.NET `[Route("api/[controller]")]` all rewrite the detected path. A route the graph names is the route the server serves.
+- **Rails controller guards.** `before_action :authenticate_user!` protects a controller, not a route, so the graph now joins it to every route that controller serves and honours `except:`. The Django example's earlier 0 protected routes for Rails-style apps was the same blind spot.
+- **Framework names for the new ecosystems.** `go.mod`, `Cargo.toml`, `composer.json`, `Gemfile`, `pom.xml`, `build.gradle` and `mix.exs` are now parsed for dependencies, and 40 new rules map them to stack names (`Go (Gin)`, `Ruby on Rails`, `Laravel`, `Spring Boot`, `ASP.NET Core`, `Phoenix`, `GORM`, `JPA / Hibernate`, …). Rules match on the published library name, so `imagine-imaging-lib` is not Gin.
+- **Phase 4 corrections now reach the graph.** `scripts/apply_corrections.py` is applied by `build_graph.py` on every rebuild, so a confirmed route, a corrected auth strategy or an answered uncertainty survives re-analysis instead of living in a file nothing read. Ids are the graph's own coordinates (`route:GET /api/posts`, `model:Post`, `auth:strategy`, `uncertainty:2`); `save_corrections.py` validates the shape at write time, and an id that matches nothing is printed on stderr instead of being silently dropped.
+- **`tests/check_example_counts.py`** pins what each shipped example must still detect (routes, protected routes, models, minimum questions, at least one non-generic rubric) and runs in CI. The pipeline smoke test proved only that the scripts do not crash; a detector regression used to degrade every example to generic filler while CI stayed green.
+- **`tests/test_generic_detection.py`** (39 tests): one package per ecosystem, each asserting a positive detection and the absence of a false positive, plus manifest parsing, framework naming and the correction pipeline.
+
+### Fixed
+- **An unrecognised stack no longer dead-ends.** A repository with no manifest produced `project.stack: []`, which the schema rejects, so `build_graph.py` refused to write and every later phase failed with "run build_graph.py first". The stack falls back to detected languages and then to `undetermined`, and the graph records two actionable uncertainties ("which framework serves this API?", "the stack is unknown — what does it use?").
+- **Generic questions announce themselves.** When the graph has no routes and no models, `generate_question_bank.py` warns on stderr that every question is generic instead of presenting filler as project-specific.
+- **`strategy: other` no longer leaks into the interview.** The Go fixture asked *"Explain your choice of other for authentication"*; the question is now skipped unless the strategy has a name, and the auth question reads from a display name ("cookie-based sessions", not "cookie").
+- **Sanctum/Passport are not JWTs.** Laravel projects were reported as JWT because the middleware name matched; they now resolve to `API key` with the evidence that the tokens are opaque.
+- **A route-level guard no longer protects the line above it.** The PHP middleware scan read a fixed 200-character window, so `Route::post(...)->middleware('auth:sanctum')` marked the preceding route as protected; the scan now stops at the statement's semicolon.
+- **The stack-pair trade-off question skips the database.** "Why did you choose PostgreSQL?" and "You use PostgreSQL — what did that cost?" were asked back to back.
+- **`test_no_pep604_union_annotations`** parsed annotations by grepping for `|`, which flagged every regex alternation (`get|post`). It now walks the AST.
+- **`ensure_ascii`/suite hygiene**: `save_progress.py` and `score_report.py` changes from 0.6.0 are pinned by tests in `tests/test_progress.py`.
+
+### Changed
+- **README documents two coverage tiers**, framework-aware and pattern packs, with the exact idioms each pack reads. Anything outside both tiers still gets an interview — it is told that it is generic.
+- `SCOPE.md` records the coverage model and two new settled decisions: no hand-editing of `project-graph.json` during Phase 4, and no full parser per language.
+
 ## [0.6.0] - 2026-11-25
 
 ### Added

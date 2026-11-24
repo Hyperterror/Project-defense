@@ -41,6 +41,25 @@ A proposal or bug report is worth acting on when **both** hold:
 On ties, prefer the fix with a regression test in `tests/` — every defect fixed
 in this repo so far is pinned by one.
 
+## Coverage model
+
+Detection has two tiers, documented in the README:
+
+- **Tier 1 (framework-aware)**: Express, Next.js, FastAPI, Flask, Django/DRF. The
+  detector models the framework, so route prefixes, mounts, routers and
+  permission classes resolve to the real endpoint.
+- **Tier 2 (pattern packs)**: Go, Ruby, PHP, Java, C#, Rust, Kotlin, Elixir and
+  Prisma, via `detect_stack_generic.py`. One pack per ecosystem, each resolving
+  the prefixes that change a path.
+
+Beyond that, the honest fallback is an uncertainty, not a guess: an
+unrecognised stack produces *"which framework serves this API?"* in the graph, a
+stderr warning from the question bank, and a generic interview that the user is
+told is generic. Adding a pack is the right way to widen coverage; inventing a
+route is not. Every pack needs tests that assert both a positive detection and
+the absence of a false positive, because a pack that over-matches is worse than
+no pack at all — it produces confident questions about routes that do not exist.
+
 ## Already decided (do not re-propose)
 
 - **Tree-sitter / any pip dependency.** Extraction fidelity is worth improving,
@@ -54,3 +73,10 @@ in this repo so far is pinned by one.
   unfalsifiable.
 - **Rendering Mermaid to images.** The `.mmd` files are the artifact; the
   renderer is the user's tool.
+- **Hand-editing `project-graph.json` during Phase 4.** The graph is regenerated
+  from facts on every run, so a hand edit is lost on the next rebuild. Phase 4
+  decisions go through `save_corrections.py` and are re-applied by
+  `build_graph.py`.
+- **A full parser per language.** Tier 2 packs are deliberately pattern-based.
+  Where a pattern cannot see the truth (dynamic routes, computed mounts, heavy
+  metaprogramming), the pack says nothing and the uncertainty asks the user.

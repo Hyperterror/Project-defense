@@ -108,10 +108,20 @@ BEFORE any final documentation is generated. This is the main differentiator.
      a hash call but the algorithm is not clear.").
    - **Conflicts:** where README claims something the code does not support.
 2. For each item, the user responds: confirm, correct, or "I don't know".
-3. Update the project graph:
-   - Confirmed "code-verified" stays "code-verified".
-   - User corrections become "user-provided" with the user's note as evidence.
-   - "I don't know" stays "UNVERIFIED" and is flagged in the readiness report.
+3. Update the project graph. **Do not hand-edit `project-graph.json`** — the next
+   `build_graph.py` run would overwrite it. Record the decision instead:
+   ```bash
+   python scripts/save_corrections.py <repo> --set "route:GET /api/posts" confirmed --note "checked in urls.py"
+   python scripts/save_corrections.py <repo> --set "auth:strategy" corrected --value JWT --note "custom middleware"
+   python scripts/save_corrections.py <repo> --set "uncertainty:2" confirmed --note "uses a managed Postgres"
+   ```
+   Then rebuild: `python scripts/build_graph.py <repo>`. Corrections are applied
+   on every rebuild, so they survive later re-analysis.
+   - Confirmed / corrected entries become `user-provided` with your note in the excerpt.
+   - `auth:strategy` and `project:stack` need `--value`: they replace content, not just status.
+   - "I don't know" (`--set <id> unknown`) stays `UNVERIFIED` and is flagged in the readiness report.
+   - A correction id that matches nothing is printed by `build_graph.py` on stderr —
+     the code may have changed, so re-ask rather than assume it landed.
 4. Repeat until the user says "looks good" or equivalent.
 
 **Core rule (from SKILL.md):** Do not generate final documentation until the

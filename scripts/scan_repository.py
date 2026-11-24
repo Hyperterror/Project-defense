@@ -189,6 +189,89 @@ def parse_requirements_txt(content: str) -> List[str]:
     return deps
 
 
+def parse_go_mod(content: str) -> List[str]:
+    """Module paths from go.mod (`require x v1.2.3`, single or in a block)."""
+    deps = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("require "):
+            stripped = stripped[len("require "):].strip()
+        if not stripped or stripped.startswith(("//", "module ", "go ", ")", "(")):
+            continue
+        token = stripped.split()[0]
+        if "/" in token and not token.startswith("=>"):
+            deps.append(token)
+    return deps
+
+
+def parse_cargo_toml(content: str) -> List[str]:
+    """Crate names from the [dependencies] and [dev-dependencies] tables."""
+    deps, section = [], ""
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            section = stripped.strip("[]").lower()
+            continue
+        if section not in ("dependencies", "dev-dependencies", "workspace.dependencies"):
+            continue
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" in stripped:
+            name = stripped.split("=")[0].strip()
+            if name:
+                deps.append(name)
+    return deps
+
+
+def parse_composer_json(content: str) -> List[str]:
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return []
+    deps = list((data.get("require") or {}).keys())
+    deps += list((data.get("require-dev") or {}).keys())
+    return deps
+
+
+def parse_gemfile(content: str) -> List[str]:
+    deps = []
+    for match in re.finditer(r"^\s*gem\s+[\"']([^\"']+)[\"']", content, re.MULTILINE):
+        deps.append(match.group(1))
+    return deps
+
+
+def parse_pom_xml(content: str) -> List[str]:
+    return [m.group(1) for m in re.finditer(r"<artifactId>([^<]+)</artifactId>", content)]
+
+
+def parse_gradle(content: str) -> List[str]:
+    deps = []
+    for match in re.finditer(
+        r"(?:^|[\s(])(?:implementation|api|compile|runtimeOnly|testImplementation)\s*\(?\s*[\"']([^\"']+)[\"']",
+        content,
+    ):
+        deps.append(match.group(1))
+    return deps
+
+
+def parse_mix_exs(content: str) -> List[str]:
+    return [m.group(1) for m in re.finditer(r"\{:([a-z_0-9]+)\s*,", content)]
+
+
+# Manifests whose dependency list we can read without a parser library. Without
+# these, a Go or Rails project has frameworks: [] and the graph cannot name its
+# own stack.
+MANIFEST_PARSERS = {
+    "go.mod": parse_go_mod,
+    "Cargo.toml": parse_cargo_toml,
+    "composer.json": parse_composer_json,
+    "Gemfile": parse_gemfile,
+    "pom.xml": parse_pom_xml,
+    "build.gradle": parse_gradle,
+    "build.gradle.kts": parse_gradle,
+    "mix.exs": parse_mix_exs,
+}
+
 def detect_framework(deps: List[str], root: Path) -> Dict[str, Any]:
     result = {"frontend": [], "backend": [], "database": [], "testing": [], "other": []}
     dep_lower = [d.lower() for d in deps]
@@ -242,6 +325,81 @@ def detect_framework(deps: List[str], root: Path) -> Dict[str, Any]:
         result["database"].append("PostgreSQL (pg)")
     if any("mysql" in d for d in dep_lower):
         result["database"].append("MySQL")
+
+    # --- Ecosystems outside the JS/Python manifests -------------------
+    # Each rule matches on the library the ecosystem actually publishes
+    # (module path, gem name, artifact id), so a name like "gin" cannot match
+    # by accident the way a bare substring would.
+
+    # Go
+    if any("gin-gonic/gin" in d for d in dep_lower):
+        result["backend"].append("Go (Gin)")
+    if any("labstack/echo" in d for d in dep_lower):
+        result["backend"].append("Go (Echo)")
+    if any("gofiber/fiber" in d for d in dep_lower):
+        result["backend"].append("Go (Fiber)")
+    if any("go-chi/chi" in d for d in dep_lower):
+        result["backend"].append("Go (Chi)")
+    if any("gorilla/mux" in d for d in dep_lower):
+        result["backend"].append("Go (Gorilla Mux)")
+    if any("gorm.io/gorm" in d for d in dep_lower):
+        result["database"].append("GORM")
+    if any("golang-jwt" in d or "dgrijalva/jwt-go" in d for d in dep_lower):
+        result["other"].append("JWT")
+
+    # Ruby
+    if any(d == "rails" or d.startswith("rails ") for d in dep_lower):
+        result["backend"].append("Ruby on Rails")
+    if any("sinatra" in d for d in dep_lower):
+        result["backend"].append("Sinatra")
+    if any("devise" in d for d in dep_lower):
+        result["other"].append("Devise")
+    if any(d in ("pg", "sqlite3", "mysql2") for d in dep_lower):
+        result["database"].append("ActiveRecord (SQL)")
+
+    # PHP
+    if any("laravel/framework" in d for d in dep_lower):
+        result["backend"].append("Laravel")
+    if any("symfony/framework-bundle" in d or "slim/slim" in d for d in dep_lower):
+        result["backend"].append("Symfony/Slim")
+    if any("laravel/sanctum" in d or "laravel/passport" in d for d in dep_lower):
+        result["other"].append("Laravel Auth")
+    if any("doctrine/orm" in d for d in dep_lower):
+        result["database"].append("Doctrine")
+
+    # Java / Kotlin
+    if any("spring-boot-starter-web" in d or "spring-boot-starter-webflux" in d for d in dep_lower):
+        result["backend"].append("Spring Boot")
+    if any("spring-boot-starter-security" in d for d in dep_lower):
+        result["other"].append("Spring Security")
+    if any("spring-boot-starter-data-jpa" in d or d.endswith("hibernate-core") for d in dep_lower):
+        result["database"].append("JPA / Hibernate")
+    if any("ktor-server-core" in d for d in dep_lower):
+        result["backend"].append("Ktor")
+
+    # Rust
+    if any(d in ("axum", "actix-web", "rocket", "warp", "poem") for d in dep_lower):
+        result["backend"].append("Rust (" + ", ".join(
+            sorted({d for d in dep_lower if d in ("axum", "actix-web", "rocket", "warp", "poem")})
+        ) + ")")
+    if any(d in ("diesel", "sqlx", "sea-orm") for d in dep_lower):
+        result["database"].append("Rust ORM (SQL)")
+    if any("jsonwebtoken" in d or d == "argon2" for d in dep_lower):
+        result["other"].append("JWT")
+
+    # C#
+    if any("microsoft.aspnetcore" in d for d in dep_lower):
+        result["backend"].append("ASP.NET Core")
+    if any("entityframeworkcore" in d for d in dep_lower):
+        result["database"].append("EF Core")
+    if any("identity" in d for d in dep_lower):
+        result["other"].append("ASP.NET Identity")
+
+    # Elixir
+    if any(d == "phoenix" for d in dep_lower):
+        result["backend"].append("Phoenix")
+    if any(d.startswith("ecto") for d in dep_lower):
+        result["database"].append("Ecto")
 
     # Testing
     if any("jest" in d for d in dep_lower):
@@ -373,10 +531,9 @@ def scan_repository(root: Path) -> Dict[str, Any]:
                 "parsed": {"dependencies": parse_requirements_txt(content)}
             }
         else:
-            manifests[rel] = {
-                "manager": manager,
-                "parsed": {"raw_preview": content[:2000]}
-            }
+            parser = MANIFEST_PARSERS.get(manifest_name)
+            parsed = {"dependencies": parser(content)} if parser else {"raw_preview": content[:2000]}
+            manifests[rel] = {"manager": manager, "parsed": parsed}
 
     # All dependencies flat list
     all_deps = []

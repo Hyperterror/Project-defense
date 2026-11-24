@@ -52,6 +52,15 @@ jobs:
             echo "::endgroup::"
           done
 
+      - name: Pin what each example must still detect
+        # Running the pipeline proves it does not crash, not that it still sees
+        # the same project. When a detector regresses, the graph quietly loses
+        # routes and the question bank quietly degrades to generic filler --
+        # both green. These numbers are the contract; examples/README.md quotes
+        # them, so a change here means updating that table too.
+        shell: bash
+        run: python tests/check_example_counts.py
+
       - name: Documentation and wiring lint
         # Catches a script nobody is told to run, a template nobody references,
         # a broken relative link, and a duplicate rubric id.

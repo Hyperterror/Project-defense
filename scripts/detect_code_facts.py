@@ -36,6 +36,17 @@ from path_filters import (  # noqa: E402
 )
 
 
+def _detect_generic(root: Path, files: List[Path]) -> Dict[str, Any]:
+    """Generic multi-language packs, imported lazily so a broken pack cannot
+    take down the dedicated detectors."""
+    try:
+        import detect_stack_generic
+    except Exception as exc:  # pragma: no cover - import-time only
+        return {"ecosystems": [], "routes": [], "models": [], "auth": {},
+                "error": str(exc)}
+    return detect_stack_generic.detect_generic(root, files)
+
+
 # ----------------------------------------------------------------------
 # Directories to skip (noise / secrets / dependencies)
 # ----------------------------------------------------------------------
@@ -1316,7 +1327,14 @@ def detect_all(root: Path) -> Dict[str, Any]:
     ignore_patterns = load_ignore_patterns(root)
     # Walk once with the shared filter so the detector and the scanner agree on
     # which files belong to the project (no node_modules, build output or .git).
-    files = [p for p in walk_files(root, ignore_patterns) if is_source_file(p)]
+    all_files = list(walk_files(root, ignore_patterns))
+    files = [p for p in all_files if is_source_file(p)]
+    # The generic packs read the languages the dedicated detectors do not cover
+    # (Go, Ruby, PHP, Java, C#, Rust, Kotlin, Elixir, Prisma). They see every
+    # file, not just JS/Python, and return nothing for ecosystems they lack a
+    # pack for -- which is what lets the caller record an uncertainty instead of
+    # silently claiming the project has no routes.
+    generic = _detect_generic(root, all_files)
 
     return {
         "repo_root": str(root),
@@ -1337,6 +1355,7 @@ def detect_all(root: Path) -> Dict[str, Any]:
         "mongoose": {
             "models": detect_mongoose_models(root, files),
         },
+        "generic": generic,
         "python_orm": {
             "models": detect_python_orm_models(root, files),
         },
@@ -1377,6 +1396,11 @@ def main():
     print(f"Express mw:      {len(facts['express']['middleware'])}")
     print(f"Python routes:   {len(facts['python']['routes'])}")
     print(f"Next.js routes:  {len(facts['nextjs']['routes'])}")
+    generic = facts.get("generic", {})
+    if generic.get("ecosystems"):
+        print(f"Generic packs:   {len(generic.get('routes', []))} routes, "
+              f"{len(generic.get('models', []))} models "
+              f"({', '.join(generic['ecosystems'])})")
     print(f"Mongoose models: {len(facts['mongoose']['models'])}")
     print(f"React components:{len(facts['react']['components'])}")
     print(f"React hooks:     {len(facts['react']['hooks'])}")

@@ -449,9 +449,14 @@ def gen_tradeoff_questions(graph: dict, rubrics_map: dict) -> list:
     idx = 1
 
     stack = graph.get("project", {}).get("stack", [])
+    database = _database_of(graph)
     if len(stack) >= 2:
         for i in range(len(stack) - 1):
             a, b = stack[i], stack[i + 1]
+            # The data store gets its own, sharper question below; asking the
+            # stack-pair version as well would ask the same thing twice.
+            if database and database in (a, b):
+                continue
             text = f"Why did you choose {a} over the obvious alternative? What trade-offs did you accept?"
             qid = f"q-t{idx:03d}"
             questions.append({
@@ -486,8 +491,22 @@ def gen_tradeoff_questions(graph: dict, rubrics_map: dict) -> list:
         idx += 1
 
     auth_strategy = graph.get("auth", {}).get("strategy", "")
-    if auth_strategy and auth_strategy != "none":
-        text = f"Explain your choice of {auth_strategy} for authentication. Why not an alternative like session-based or OAuth?"
+    # "other" is the detector saying it saw auth code but could not name the
+    # mechanism. Asking "why did you choose other" would print that placeholder
+    # into the interview, so the question is only asked when the strategy is a
+    # real name; the auth walkthrough question covers the rest.
+    if auth_strategy and auth_strategy not in ("none", "other"):
+        label = {
+            "JWT": "JWT",
+            "session": "server-side sessions",
+            "cookie": "cookie-based sessions",
+            "OAuth": "OAuth",
+            "API key": "API keys",
+        }.get(auth_strategy, auth_strategy)
+        text = (
+            f"Your project uses {label} for authentication. Why that over the "
+            f"alternatives, and what does it cost you?"
+        )
         qid = f"q-t{idx:03d}"
         questions.append({
             "id": qid,
@@ -638,6 +657,14 @@ def generate_question_bank(repo_root: Path) -> dict:
     questions.extend(gen_failure_questions(graph, rubrics_map))
     questions.extend(gen_tradeoff_questions(graph, rubrics_map))
     questions.extend(gen_coding_questions(graph, rubrics_map))
+
+    if not graph.get("backend", {}).get("routes") and not graph.get("data", {}).get("models"):
+        print(
+            "Warning: the graph has no routes and no models, so every question "
+            "below is generic. Resolve the graph's uncertainties in Phase 4 "
+            "(which framework, which entry file) and rerun this script.",
+            file=sys.stderr,
+        )
 
     bank = {"questions": questions}
     defense_dir = repo_root / ".project-defense"

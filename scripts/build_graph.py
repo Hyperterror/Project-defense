@@ -43,6 +43,11 @@ try:
 except ImportError:
     validate_value = None  # type: ignore
 
+try:
+    import apply_corrections
+except ImportError:  # pragma: no cover - the script is shipped alongside
+    apply_corrections = None  # type: ignore
+
 
 # ----------------------------------------------------------------------
 # Helpers
@@ -93,6 +98,13 @@ def build_project(scan: Dict[str, Any], repo_root: Path) -> Dict[str, Any]:
         # Fall back to language detection
         langs = list(scan.get("languages", {}).keys())
         stack = langs[:3]
+    if not stack:
+        # Nothing identifiable: no manifest, or a language this skill has no
+        # pack for. Previously this produced `stack: []`, which the schema
+        # rejects, so build_graph refused to write and every later phase failed
+        # with "run build_graph.py first" -- a dead end with no way forward.
+        # A named placeholder keeps the pipeline moving and says so in the graph.
+        stack = ["undetermined"]
 
     # Entry points: prefer package.json's "main" or the detected list
     entry_points = []
@@ -167,6 +179,16 @@ def build_backend(code: Dict[str, Any]) -> Dict[str, Any]:
     detected = list(express.get("routes", []))
     detected += list(code.get("python", {}).get("routes", []))
     detected += list(code.get("nextjs", {}).get("routes", []))
+    # Generic packs (Go, Ruby, PHP, Java, C#, Rust, Kotlin, Elixir) produce the
+    # same evidence shape, so they join the same list and dedupe the same way.
+    detected += list(code.get("generic", {}).get("routes", []))
+
+    # Rails protects a controller, not a route: join `before_action
+    # :authenticate_user!` to every route that controller serves.
+    guards = (code.get("generic") or {}).get("guards") or []
+    guarded_controllers = {}
+    for guard in guards:
+        guarded_controllers[guard.get("controller", "")] = guard
 
     routes = []
     seen_routes = set()
@@ -189,6 +211,13 @@ def build_backend(code: Dict[str, Any]) -> Dict[str, Any]:
             "evidence": r["evidence"],
         }
         middleware = [m for m in (r.get("middleware") or []) if m]
+        handler = entry["handler"]
+        controller = handler.split("#", 1)[0] if "#" in handler else ""
+        if controller and controller in guarded_controllers:
+            guard = guarded_controllers[controller]
+            action = handler.split("#", 1)[1] if "#" in handler else ""
+            if action not in (guard.get("except") or []):
+                middleware.append(guard.get("guard", "before_action"))
         if middleware:
             entry["middleware"] = middleware
         routes.append(entry)
@@ -207,6 +236,19 @@ def build_backend(code: Dict[str, Any]) -> Dict[str, Any]:
         "controllers": [],  # Not auto-detected; agent refines in Phase 4
         "services": [],     # Not auto-detected; agent refines in Phase 4
     }
+
+
+def _normalise_field(field: Any) -> Dict[str, Any]:
+    """The schema wants {name, type}; packs sometimes only know a name."""
+    if isinstance(field, dict):
+        entry = {"name": str(field.get("name", "")), "type": str(field.get("type") or "unknown")}
+        for flag in ("required", "unique", "indexed"):
+            if field.get(flag) is not None:
+                entry[flag] = bool(field[flag])
+        if field.get("description"):
+            entry["description"] = str(field["description"])
+        return entry
+    return {"name": str(field), "type": "unknown"}
 
 
 def build_data(code: Dict[str, Any]) -> Dict[str, Any]:
@@ -230,6 +272,19 @@ def build_data(code: Dict[str, Any]) -> Dict[str, Any]:
             "evidence": m["evidence"],
         })
 
+    # Generic packs: Go structs, Rails/Eloquent/JPA entities, Prisma schemas,
+    # Ecto schemas. Keyed by name so a model found twice is listed once.
+    seen_models = {m["name"] for m in models}
+    for m in code.get("generic", {}).get("models", []):
+        if m.get("name") in seen_models:
+            continue
+        seen_models.add(m["name"])
+        models.append({
+            "name": m["name"],
+            "fields": [_normalise_field(f) for f in m.get("fields", [])],
+            "evidence": m["evidence"],
+        })
+
     # Heuristic relationship inference: look for ObjectId refs across models
     # by scanning source for 'ref: "ModelName"'. The detector doesn't do this yet,
     # so we leave relationships empty for the agent to fill in.
@@ -248,6 +303,18 @@ def build_auth(code: Dict[str, Any], backend_routes: List[Dict[str, Any]]) -> Di
     session_count = len(auth_signals.get("session_auth", []))
     permission_count = len(auth_signals.get("permissions", []))
     provider_count = len(auth_signals.get("provider_auth", []))
+
+    # Tier-2 packs report their own signals (token/hash/guard/permission/session)
+    # per ecosystem. Without this a Rails project with Devise, bcrypt and a JWT
+    # gem still reported `strategy: other`, and the interview asked nothing about
+    # authentication it could see in the code.
+    generic_auth = (code.get("generic") or {}).get("auth") or {}
+    generic_token = len(generic_auth.get("token") or [])
+    generic_hash = len(generic_auth.get("hash") or [])
+    generic_guard = len(generic_auth.get("guard") or [])
+    generic_permission = len(generic_auth.get("permission") or [])
+    generic_session = len(generic_auth.get("session") or [])
+    generic_api_key = len(generic_auth.get("api_key") or [])
 
     if jwt_count > 0:
         strategy = "JWT"
@@ -277,6 +344,44 @@ def build_auth(code: Dict[str, Any], backend_routes: List[Dict[str, Any]]) -> Di
             "carried in cookies and checked per request. Confirm the exact "
             "cookie/refresh behaviour with the user."
             % sample["file"]
+        )
+    elif generic_api_key > 0:
+        strategy = "API key"
+        sample = (generic_auth.get("api_key") or [{}])[0]
+        token_handling = (
+            "Opaque access tokens detected in %s (%s) -- not JWTs. Confirm where the "
+            "token is issued and how it is sent."
+            % (sample.get("evidence", {}).get("file", "an unread file"),
+               sample.get("match", "token"))
+        )
+    elif generic_token > 0:
+        strategy = "JWT"
+        sample = (generic_auth.get("token") or [{}])[0]
+        token_handling = (
+            "A JWT library is used in %s (%s). Confirm whether it issues tokens or "
+            "only verifies them." % (sample.get("evidence", {}).get("file", "an unread file"),
+                                     sample.get("match", "jwt"))
+        )
+    elif generic_hash > 0 or generic_session > 0:
+        strategy = "session"
+        sample = ((generic_auth.get("hash") or generic_auth.get("session")) or [{}])[0]
+        token_handling = (
+            "Password hashing and/or framework authentication detected in %s (%s); "
+            "session or cookie-based auth likely. Confirm with the user."
+            % (sample.get("evidence", {}).get("file", "an unread file"),
+               sample.get("match", "hashing"))
+        )
+    elif generic_permission > 0 or generic_guard > 0:
+        # Guards without any token code: the framework's own form login or
+        # session is the common case (Spring Security, Devise, ASP.NET Identity).
+        # Delegated cookie providers are reported separately as provider_auth.
+        strategy = "session"
+        sample = ((generic_auth.get("permission") or generic_auth.get("guard")) or [{}])[0]
+        token_handling = (
+            "Route guards detected in %s (%s) but no token code; the credential may "
+            "live in a cookie or outside this repo. Confirm with the user."
+            % (sample.get("evidence", {}).get("file", "an unread file"),
+               sample.get("match", "guard"))
         )
     elif permission_count > 0:
         strategy = "other"
@@ -361,6 +466,75 @@ def build_risks(code: Dict[str, Any], scan: Dict[str, Any]) -> List[Dict[str, An
             "mitigation": "Add at least a smoke test for the critical-path endpoints (e.g., auth + one CRUD).",
         })
     return risks
+
+
+def _dedupe_uncertainties(uncertainties: List[Dict[str, Any]]) -> None:
+    """Two detectors can ask the same question; ask it once."""
+    seen = set()
+    unique = []
+    for entry in uncertainties:
+        key = (entry.get("question") or "").strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(entry)
+    uncertainties[:] = unique
+
+
+def build_coverage_uncertainties(scan: Dict[str, Any], backend: Dict[str, Any],
+                                 data: Dict[str, Any], code: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Say out loud when the analysis saw nothing.
+
+    A project with zero routes and zero models is either an empty repository or a
+    stack this skill cannot read. Both used to reach Phase 5 silently: the
+    question bank fell back to generic questions and nothing in the graph hinted
+    that the interview was not about this project. Each case is now a question
+    the agent has to ask the user before generating anything.
+    """
+    entries: List[Dict[str, Any]] = []
+    stack = (scan.get("frameworks") or {})
+    has_stack = any(stack.get(k) for k in ("frontend", "backend", "database"))
+    ecosystems = (code.get("generic") or {}).get("ecosystems", [])
+
+    if not backend.get("routes") and not data.get("models"):
+        entries.append({
+            "question": (
+                "The analysis found no routes and no models. Which framework serves "
+                "this project's API, and which file defines its first route?"
+            ),
+            "context": (
+                "No detector matched this repository. Supported route detectors are "
+                "Express, Next.js, FastAPI, Flask, Django/DRF, Gin/Echo/Chi/Fiber, "
+                "Rails, Laravel, Spring, ASP.NET, Axum/Actix, Ktor and Phoenix. "
+                f"Ecosystems seen in the file tree: {', '.join(ecosystems) or 'none recognised'}."
+            ),
+            "evidence": {
+                "file": "scan-facts.json",
+                "lines": [1, 1],
+                "excerpt": "no routes and no models detected",
+                "status": "UNVERIFIED",
+            },
+            "impact_if_wrong": (
+                "Every later question would be generic, so the interview would not "
+                "test knowledge of this project."
+            ),
+        })
+    if not has_stack:
+        entries.append({
+            "question": (
+                "No dependency manifest was read, so the stack is unknown. What "
+                "languages, frameworks and database does this project use?"
+            ),
+            "context": "Manifests read: package.json, requirements.txt and the lock/manifest files for go, cargo, composer, bundler, maven, gradle and mix. None yielded dependencies.",
+            "evidence": {
+                "file": "scan-facts.json",
+                "lines": [1, 1],
+                "excerpt": "frameworks: {}",
+                "status": "UNVERIFIED",
+            },
+            "impact_if_wrong": "Trade-off and architecture questions would be about the wrong stack.",
+        })
+    return entries
 
 
 def build_uncertainties(code: Dict[str, Any], scan: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -543,8 +717,10 @@ def build_graph(repo_root: Path, scan: Dict[str, Any], code: Dict[str, Any]) -> 
     data_flows = build_data_flows(frontend["api_calls"], backend["routes"])
     risks = build_risks(code, scan)
     uncertainties = build_uncertainties(code, scan)
+    uncertainties.extend(build_coverage_uncertainties(scan, backend, data, code))
+    _dedupe_uncertainties(uncertainties)
 
-    return {
+    graph = {
         "session_identity": session_identity,
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
         "git_head": _get_git_head(repo_root),
@@ -560,6 +736,13 @@ def build_graph(repo_root: Path, scan: Dict[str, Any], code: Dict[str, Any]) -> 
         "risks": risks,
         "uncertainties": uncertainties,
     }
+
+    # Phase 4 answers outlive a rebuild: without this the graph was always the
+    # machine's first guess, and corrections.json was written and never read.
+    if apply_corrections is not None:
+        graph["_corrections"] = apply_corrections.apply_from_disk(repo_root, graph)
+
+    return graph
 
 
 def main():
@@ -591,6 +774,17 @@ def main():
 
     print(f"Building project graph for {repo_root}...")
     graph = build_graph(repo_root, scan, code)
+    corrections = graph.pop("_corrections", {"applied": [], "unmatched": []})
+    if corrections.get("applied"):
+        print(f"Corrections applied: {len(corrections['applied'])}")
+    if corrections.get("unmatched"):
+        print(
+            "Corrections that matched nothing in this graph (the code may have "
+            "changed; re-ask rather than assume they landed):",
+            file=sys.stderr,
+        )
+        for entry_id in corrections["unmatched"]:
+            print(f"  - {entry_id}", file=sys.stderr)
 
     # Validate against schema
     schema_path = SCRIPT_DIR.parent / "templates" / "project-graph.schema.json"

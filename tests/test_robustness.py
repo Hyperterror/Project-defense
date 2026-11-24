@@ -524,12 +524,34 @@ class TestChallengeScaffolding(unittest.TestCase):
 
 class TestPython38Compatibility(unittest.TestCase):
     def test_no_pep604_union_annotations(self):
-        """Scripts advertise Python 3.8+; `X | None` annotations break 3.8/3.9."""
+        """Scripts advertise Python 3.8+; `X | None` annotations break 3.8/3.9.
+
+        Checked through the AST, not by grepping for `|`: a regex table full of
+        alternations (`get|post`) is not an annotation, and a text scan flags
+        every one of them.
+        """
+        import ast
+
         offenders = []
+
+        def check(node, path, where):
+            for child in ast.walk(node):
+                if isinstance(child, ast.BinOp) and isinstance(child.op, ast.BitOr):
+                    offenders.append("{}:{} ({})".format(path.name, child.lineno, where))
+
         for path in sorted(SCRIPTS_DIR.glob("*.py")):
-            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-                if "->" in line and "|" in line.split("->", 1)[1]:
-                    offenders.append("{}:{}".format(path.name, lineno))
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    args = node.args
+                    annotated = list(args.args) + list(args.kwonlyargs) + list(args.posonlyargs)
+                    for arg in annotated:
+                        if arg.annotation is not None:
+                            check(arg.annotation, path, "arg " + arg.arg)
+                    if node.returns is not None:
+                        check(node.returns, path, "return")
+                elif isinstance(node, ast.AnnAssign) and node.annotation is not None:
+                    check(node.annotation, path, "variable")
         self.assertEqual(offenders, [], "PEP 604 unions found: {}".format(offenders))
 
 

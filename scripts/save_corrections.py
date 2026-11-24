@@ -24,6 +24,17 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+# The id grammar lives with the applier so the writer and the reader cannot drift.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from apply_corrections import ID_PATTERNS, VALID_ID_HELP, validate_id
+except ImportError:  # pragma: no cover - shipped alongside
+    ID_PATTERNS = {}
+    VALID_ID_HELP = ""
+
+    def validate_id(entry_id: str):  # type: ignore
+        return ("", entry_id)
+
 
 VALID_DECISIONS = {"confirmed", "corrected", "unknown"}
 
@@ -80,7 +91,8 @@ def save_corrections(path: Path, corrections: dict) -> None:
         raise
 
 
-def update_entry(corrections: dict, entry_id: str, decision: str, note: str = None) -> dict:
+def update_entry(corrections: dict, entry_id: str, decision: str, note: str = None,
+                 value=None) -> dict:
     """Create or update a single entry in the corrections dict.
     Returns the updated dict (mutates in place and returns it).
     Raises ValueError if decision is invalid.
@@ -89,11 +101,14 @@ def update_entry(corrections: dict, entry_id: str, decision: str, note: str = No
         raise ValueError(
             f"Invalid decision '{decision}'. Must be one of: {', '.join(sorted(VALID_DECISIONS))}."
         )
-    corrections[entry_id] = {
+    entry = {
         "decision": decision,
         "note": note,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    if value is not None:
+        entry["value"] = value
+    corrections[entry_id] = entry
     return corrections
 
 
@@ -114,6 +129,15 @@ def main():
                        help="Set an entry. DECISION must be confirmed, corrected, or unknown.")
     group.add_argument("--get", metavar="ID", help="Print one entry as JSON")
     parser.add_argument("--note", default=None, help="Optional note text for --set")
+    parser.add_argument(
+        "--value",
+        default=None,
+        help=(
+            "The corrected content for --set. A plain string, or a comma-separated "
+            "list for project:stack. Required for auth:strategy and project:stack "
+            "when the decision is 'corrected'."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -140,7 +164,20 @@ def main():
             sys.exit(
                 f"Error: decision must be one of {', '.join(sorted(VALID_DECISIONS))}. Got: '{decision}'."
             )
-        update_entry(corrections, entry_id, decision, args.note)
+        # An id the graph cannot resolve is a typo, and a typo that is accepted
+        # here becomes a correction that silently never applies.
+        validate_id(entry_id)
+        value = args.value
+        if value is not None and entry_id.startswith("project:stack"):
+            value = [part.strip() for part in value.split(",") if part.strip()]
+        if decision == "corrected" and value is None and entry_id in (
+            "auth:strategy", "project:stack",
+        ):
+            sys.exit(
+                f"Error: '{entry_id}' needs --value with the corrected content, "
+                "or the graph would record 'corrected' without saying what to."
+            )
+        update_entry(corrections, entry_id, decision, args.note, value)
         save_corrections(corrections_path, corrections)
         print(f"Saved correction for '{entry_id}': {decision}")
 
