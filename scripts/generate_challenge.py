@@ -77,18 +77,35 @@ def find_feature_entry(graph: dict, feature: str) -> Optional[dict]:
     of falling back to a fabricated stub.
     """
     feature_lower = feature.lower().strip().replace("\\", "/")
+    if not feature_lower:
+        return None
+
+    # Rank the fields: a name/path/handler hit identifies the feature itself,
+    # while `details` and the evidence path are prose that merely mentions it.
+    # Without the ranking, `--feature "api/todos"` resolved to a page component
+    # whose fetch call pointed at that URL instead of the route itself.
+    exact_routes, named, weak = [], [], []
+    wanted = "/" + feature_lower.strip("/")
     for _section, entry in _iter_entries(graph):
-        haystacks = [
-            str(entry.get("name", "")),
-            str(entry.get("method", "")),
-            str(entry.get("path", "")),
-            str(entry.get("handler", "")),
-            json.dumps(entry.get("details", {})),
-            str(entry.get("evidence", {}).get("file", "")),
-        ]
-        for hay in haystacks:
-            if feature_lower and feature_lower in hay.lower().replace("\\", "/"):
-                return entry
+        is_route = "method" in entry and "path" in entry
+        path = str(entry.get("path", "")).lower()
+        name = str(entry.get("name", "")).lower().replace("\\", "/")
+        handler = str(entry.get("handler", "")).lower().replace("\\", "/")
+        if is_route and wanted == path:
+            exact_routes.append(entry)
+        elif feature_lower in name or feature_lower in handler or feature_lower in path:
+            named.append(entry)
+        else:
+            haystacks = [
+                str(entry.get("method", "")),
+                json.dumps(entry.get("details", {})),
+                str(entry.get("evidence", {}).get("file", "")),
+            ]
+            if any(feature_lower in h.lower().replace("\\", "/") for h in haystacks):
+                weak.append(entry)
+    for bucket in (exact_routes, named, weak):
+        if bucket:
+            return bucket[0]
     return None
 
 
@@ -128,6 +145,66 @@ def _safe_ident(name: str) -> str:
     if cleaned[0].isdigit():
         cleaned = "f_" + cleaned
     return cleaned
+
+
+# A definition we could practise on: def/class/function/const/export.
+RE_HANDLER_DEF = re.compile(
+    r"^[ 	]*(?:export[ 	]+)?(?:async[ 	]+)?(?:def|class|function)[ 	]+([A-Za-z_$][\w$]*)",
+    re.M,
+)
+
+
+def _has_function_bodies(text: str, suffix: str) -> bool:
+    """True when stubbing this text would actually remove something."""
+    try:
+        return _stub_source(text, suffix).strip() != text.strip()
+    except Exception:
+        return False
+
+
+def locate_handler(repo_root: Path, entry_name: str, prefer_file: Optional[str] = None) -> Optional[str]:
+    """Find the file that *defines* a graph entry's handler.
+
+    A route's evidence points at where it is declared, which is not always
+    where it is implemented: a Django URLconf points at `urls.py` while
+    `PostViewSet` lives in `views.py`, and a Next.js route is a file name
+    rather than a function. Practising on the declaration file would mean
+    practising on a routing table, so the defining file is preferred when one
+    exists.
+    """
+    if not entry_name:
+        return None
+    parts = [part.strip() for part in str(entry_name).split(".") if part.strip()]
+    candidates = [part for part in reversed(parts) if part]
+    if not candidates:
+        return None
+
+    try:
+        from path_filters import load_ignore_patterns, walk_files
+        from detect_code_facts import is_source_file
+    except ImportError:
+        return None
+
+    source_files = [
+        path for path in walk_files(repo_root, load_ignore_patterns(repo_root))
+        if is_source_file(path)
+    ]
+
+    for name in candidates:
+        if not re.match(r"^[A-Za-z_$][\w$]*$", name):
+            continue
+        for path in sorted(source_files):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for match in RE_HANDLER_DEF.finditer(text):
+                if match.group(1) != name:
+                    continue
+                rel = str(path.relative_to(repo_root))
+                if _has_function_bodies(text, path.suffix):
+                    return rel
+    return None
 
 
 def _make_challenge_id(feature: str, challenge_type: str, difficulty: str, timestamp: int) -> str:
@@ -676,6 +753,20 @@ def generate_challenge(repo_root: Path, feature: str, challenge_type: str, diffi
                 "lines": ev.get("lines", [1, 1]),
                 "description": entry.get("name", feature),
             }]
+    # The evidence file is where the entry was *detected*; for frameworks that
+    # declare a route in one file and implement it in another, relocate to the
+    # file that actually defines the handler.
+    if source_file:
+        relocated = locate_handler(repo_root, entry.get("name", feature) if entry else feature,
+                                   source_file)
+        if relocated and relocated != source_file:
+            source_file = relocated
+            source_refs = [{
+                "file": relocated,
+                "lines": [1, 1],
+                "description": entry.get("name", feature) if entry else feature,
+            }]
+
     # Fallback: create a stub source file (only when the graph entry has no file).
     if not source_file:
         source_file = f"{_safe_ident(feature)}.py"

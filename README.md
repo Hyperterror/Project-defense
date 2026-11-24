@@ -91,18 +91,20 @@ of the workflow against the extracted copy.
 
 ---
 
-## Supported Stacks (v1)
+## Supported Stacks
 
-| Stack | Status |
-|-------|--------|
-| **React + Node/Express + MongoDB** | **Fully supported** — all detectors active |
-| Next.js + Supabase/Firebase | Experimental |
-| Python Flask/FastAPI + SQL | Experimental |
-| Django + PostgreSQL | Experimental |
-| React Native + Firebase | Experimental |
+| Stack | Routes | Auth | Models | Status |
+|-------|--------|------|--------|--------|
+| **React + Node/Express + MongoDB** | Express `app.get(...)`, `router.use(...)` mounts | JWT, bcrypt | Mongoose | **Fully supported** |
+| **Django + DRF + PostgreSQL** | URLconf `path()` + `include()` chains, DRF routers | Django auth, DRF permissions | Django ORM | **Supported** |
+| **FastAPI / Flask + SQL** | Decorators, `APIRouter(prefix=...)`, `Depends(...)` guards | jose/PyJWT, passlib | SQLAlchemy | **Supported** |
+| **Next.js + Supabase** | `app/api/**/route.ts` and `pages/api/**` | Supabase SSR / NextAuth cookies | Supabase (client calls only) | **Supported** |
+| React Native + Firebase | — | — | — | Experimental |
 
-Experimental stacks: the workflow runs, but detector coverage is partial. The
-agent will tell you which parts are UNVERIFIED.
+"Supported" means routes, auth strategy and models are extracted with evidence,
+so question generation and practice challenges work without manual reading.
+What stays manual everywhere: the service/controller layer, user flows and data
+flows. The agent marks those UNVERIFIED and asks you rather than inventing them.
 
 ---
 
@@ -242,7 +244,7 @@ project-defense-skill/
 └── LICENSE
 ```
 
-Run the full suite with `python -m unittest discover -s tests -p "test_*.py"` (109 tests). CI runs it on
+Run the full suite with `python -m unittest discover -s tests -p "test_*.py"` (129 tests). CI runs it on
 Python 3.8, 3.10 and 3.12 on ubuntu, plus 3.12 on windows, then smoke-tests all four example projects.
 
 ---

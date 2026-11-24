@@ -198,8 +198,13 @@ def gen_explanation_questions(graph: dict, rubrics_map: dict) -> list:
     questions = []
     idx = 1
     seen = set()
+    has_protected = bool(graph.get("auth", {}).get("protected_routes"))
     for section, entry in _iter_named_entries(graph):
         if section in seen:
+            continue
+        # The auth-flow question below covers protected routes better than a
+        # generic walkthrough of one of them.
+        if section == "auth" and has_protected:
             continue
         seen.add(section)
         name = entry.get("name", section)
@@ -213,6 +218,70 @@ def gen_explanation_questions(graph: dict, rubrics_map: dict) -> list:
             "rubric_id": _rubric_for(rubrics_map, qid, "explanation", text),
             "difficulty": "medium",
             "project_references": _ref_from_evidence(entry),
+        })
+        idx += 1
+
+    # Auth-flow question: the single most common interview follow-up. Uses the
+    # graph's protected routes, which the detectors now find for Express mounts,
+    # FastAPI dependencies and DRF permission classes alike.
+    protected = graph.get("auth", {}).get("protected_routes", []) or []
+    if protected:
+        examples = ", ".join(
+            "`%s`" % entry.get("name", "") for entry in protected[:3]
+        )
+        guards = sorted({
+            (entry.get("details") or {}).get("guard", "")
+            for entry in protected
+        } - {""})
+        guard_clause = (
+            " The guard applied is `%s`." % guards[0] if guards else ""
+        )
+        text = (
+            "Your API has %d protected route(s) -- %s.%s Walk me through how a "
+            "request to one of them proves who the caller is: where the "
+            "credential is read, where it is verified, what object the identity "
+            "becomes in the handler, and what the caller sees when it fails."
+            % (len(protected), examples, guard_clause)
+        )
+        qid = f"q-e{idx:03d}"
+        questions.append({
+            "id": qid,
+            "category": "explanation",
+            "text": text,
+            "rubric_id": _rubric_for(rubrics_map, qid, "explanation", text),
+            "difficulty": "hard",
+            "project_references": _ref_from_evidence(protected[0]),
+        })
+        idx += 1
+
+    # Frontend/backend contract: when the frontend calls API endpoints, ask
+    # which backend route answers each call. Mismatches are exactly the kind of
+    # defect a defense interview is designed to surface.
+    api_calls = graph.get("frontend", {}).get("api_calls", []) or []
+    routes = graph.get("backend", {}).get("routes", []) or []
+    if api_calls and routes:
+        endpoints = sorted({
+            (call.get("details") or {}).get("endpoint", "")
+            for call in api_calls
+        } - {""})
+        described = ", ".join("`%s`" % e for e in endpoints[:5])
+        route_paths = sorted({route.get("path", "") for route in routes})
+        listed = ", ".join("`%s`" % p for p in route_paths[:5])
+        text = (
+            "The frontend calls %s; the backend serves %s. Pick one call and "
+            "trace it end to end: the component that makes it, the route that "
+            "answers it, and the function that touches the database. If any call "
+            "has no matching route, say which."
+            % (described, listed)
+        )
+        qid = f"q-e{idx:03d}"
+        questions.append({
+            "id": qid,
+            "category": "explanation",
+            "text": text,
+            "rubric_id": _rubric_for(rubrics_map, qid, "explanation", text),
+            "difficulty": "hard",
+            "project_references": _ref_from_evidence(api_calls[0]),
         })
         idx += 1
 
@@ -284,8 +353,14 @@ def gen_failure_questions(graph: dict, rubrics_map: dict) -> list:
     for risk in graph.get("risks", []):
         if idx > 5:
             break
-        desc = risk.get("description", "an error occurs")
-        text = f"What happens in your application when {desc.lower()}? Walk me through the failure path."
+        desc = risk.get("description", "an error occurs").strip().rstrip(".")
+        # Phrasing has to survive any risk sentence: "no test directory detected"
+        # reads badly as "when ... ?", but as a stated risk it reads fine.
+        text = (
+            f"Your project has this known weakness: {desc}. If it were exercised "
+            "in production, what would the first symptom be, what would break "
+            "next, and how would you notice?"
+        )
         qid = f"q-f{idx:03d}"
         questions.append({
             "id": qid,
@@ -374,17 +449,57 @@ def gen_tradeoff_questions(graph: dict, rubrics_map: dict) -> list:
     return questions
 
 
+def _resource_of(path: str) -> str:
+    """Name the resource a route belongs to: /api/todos/{id} -> todos."""
+    segments = [seg for seg in path.strip("/").split("/") if seg]
+    while segments and segments[0].lower() in (
+        "api", "rest", "v1", "v2", "v3", "api-v1", "api-v2",
+    ):
+        segments = segments[1:]
+    return segments[0] if segments else path
+
+
 def gen_coding_questions(graph: dict, rubrics_map: dict) -> list:
-    """One per backend route + one generic test-writing question if no rubric is linked."""
+    """One per resource, not one per route, plus a test-writing question.
+
+    A viewset serving six verbs is one thing to understand, not six: asking the
+    same question about `GET /posts`, `POST /posts`, `PUT /posts/{id}` and three
+    more turns a mock interview into a queue. Routes are grouped by resource and
+    the group names its siblings, so nothing in the graph goes unmentioned while
+    the candidate gets one question per concept.
+    """
     questions = []
     idx = 1
 
     routes = graph.get("backend", {}).get("routes", [])
+    grouped: dict = {}
     for route in routes:
-        handler = route.get("handler", "the route")
-        method = route.get("method", "GET")
-        path = route.get("path", "/")
-        text = f"Implement or explain the logic behind the {method} {path} handler (`{handler}`). What does it need to do and what edge cases should it handle?"
+        grouped.setdefault(_resource_of(route.get("path", "/")), []).append(route)
+
+    for _resource, members in sorted(grouped.items()):
+        # Prefer a protected route, then a write, as the representative.
+        def rank(route: dict) -> tuple:
+            protected = bool(route.get("middleware"))
+            write = route.get("method") in ("POST", "PUT", "PATCH", "DELETE")
+            return (not protected, not write, route.get("path", ""))
+
+        chosen = sorted(members, key=rank)[0]
+        handler = chosen.get("handler", "the route")
+        method = chosen.get("method", "GET")
+        path = chosen.get("path", "/")
+        text = (
+            f"Implement or explain the logic behind the {method} {path} handler "
+            f"(`{handler}`). What does it need to do and what edge cases should "
+            "it handle?"
+        )
+        if len(members) > 1:
+            siblings = ", ".join(
+                sorted({f"{m.get('method', 'GET')} {m.get('path', '/')}" for m in members})
+            )
+            text += (
+                f" The same resource is also served by: {siblings} -- say briefly "
+                "what each of those does differently."
+            )
         qid = f"q-c{idx:03d}"
         questions.append({
             "id": qid,
@@ -392,7 +507,7 @@ def gen_coding_questions(graph: dict, rubrics_map: dict) -> list:
             "text": text,
             "rubric_id": _rubric_for(rubrics_map, qid, "coding_task", text),
             "difficulty": "hard",
-            "project_references": _ref_from_evidence(route),
+            "project_references": _ref_from_evidence(chosen),
         })
         idx += 1
 

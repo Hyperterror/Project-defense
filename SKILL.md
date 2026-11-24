@@ -161,12 +161,18 @@ All outputs go in a `.project-defense/` folder at the analyzed repository's root
 - `readiness-report.md` — final readiness verdict
 
 ## Supported Stacks
-Version 1 fully supports: **React + Node/Express + MongoDB**.
-The other stacks are experimental — run the workflow, but tell the user coverage is partial:
-- Next.js + Supabase/Firebase
-- Python Flask/FastAPI + SQL
-- Django + PostgreSQL
+Route, auth and model extraction is implemented for each of these, with evidence:
+
+- **React + Node/Express + MongoDB** — fully supported
+- **Django + DRF + PostgreSQL** — URLconf `include()` chains, DRF routers and permission classes
+- **FastAPI / Flask + SQL** — decorator routes, `APIRouter` prefixes, `Depends(...)` guards
+- **Next.js + Supabase** — file-based routes and delegated cookie auth
+
+Still experimental (the workflow runs, but say coverage is partial):
 - React Native + Firebase
+
+For every stack, the service/controller layer, user flows and data flows are not
+auto-detected. Read the code, cite it, and mark what you could not verify.
 
 ## Privacy & Safety
 See [SECURITY.md](SECURITY.md) for the full privacy and safety contract.

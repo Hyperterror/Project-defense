@@ -150,12 +150,27 @@ def build_frontend(code: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# A middleware or dependency name that reads like access control.
+AUTH_GUARD_HINT = re.compile(
+    r"(auth|user|admin|token|permission|login|current|guard|session|jwt|require)",
+    re.I,
+)
+
+
 def build_backend(code: Dict[str, Any]) -> Dict[str, Any]:
     """Backend: routes, middleware, controllers, services."""
     express = code.get("express", {})
 
+    # Every framework ends up in one route list: the graph is about *this*
+    # project's API surface, not about which library serves it. Order is fixed
+    # (Express, Python, Next.js) so the output stays deterministic.
+    detected = list(express.get("routes", []))
+    detected += list(code.get("python", {}).get("routes", []))
+    detected += list(code.get("nextjs", {}).get("routes", []))
+
     routes = []
-    for r in express.get("routes", []):
+    seen_routes = set()
+    for r in detected:
         handler = r.get("handler")
         # The schema requires handler to be a string. When the detector could
         # not extract a named handler (e.g., for inline arrow functions), we
@@ -163,12 +178,20 @@ def build_backend(code: Dict[str, Any]) -> Dict[str, Any]:
         # agent refines this in Phase 4 to a real function/closure name.
         if not handler:
             handler = Path(r["evidence"]["file"]).stem
-        routes.append({
+        key = (r["method"], r["path"], handler)
+        if key in seen_routes:
+            continue
+        seen_routes.add(key)
+        entry = {
             "method": r["method"],
             "path": r["path"],
             "handler": handler,
             "evidence": r["evidence"],
-        })
+        }
+        middleware = [m for m in (r.get("middleware") or []) if m]
+        if middleware:
+            entry["middleware"] = middleware
+        routes.append(entry)
 
     middleware = []
     for m in express.get("middleware", []):
@@ -222,6 +245,9 @@ def build_auth(code: Dict[str, Any], backend_routes: List[Dict[str, Any]]) -> Di
     auth_signals = code.get("auth", {})
     jwt_count = len(auth_signals.get("jwt_verify", []))
     bcrypt_count = len(auth_signals.get("bcrypt_usage", []))
+    session_count = len(auth_signals.get("session_auth", []))
+    permission_count = len(auth_signals.get("permissions", []))
+    provider_count = len(auth_signals.get("provider_auth", []))
 
     if jwt_count > 0:
         strategy = "JWT"
@@ -234,9 +260,30 @@ def build_auth(code: Dict[str, Any], backend_routes: List[Dict[str, Any]]) -> Di
             )
         else:
             token_handling = "JWT-based auth detected. Confirm storage (cookie, localStorage, etc.) with user."
-    elif bcrypt_count > 0:
+    elif bcrypt_count > 0 or session_count > 0:
         strategy = "session"
-        token_handling = "Password hashing detected (bcrypt); session-based auth likely. Confirm with user."
+        token_handling = (
+            "Password hashing and/or framework session auth detected "
+            "(login/authenticate); session or cookie-based auth likely. "
+            "Confirm with user."
+        )
+    elif provider_count > 0:
+        # Supabase / NextAuth / Auth.js: the credential check is delegated, and
+        # the session lives in cookies the app only reads.
+        strategy = "cookie"
+        sample = auth_signals["provider_auth"][0]
+        token_handling = (
+            "Delegated auth provider detected (%s); the session is normally "
+            "carried in cookies and checked per request. Confirm the exact "
+            "cookie/refresh behaviour with the user."
+            % sample["file"]
+        )
+    elif permission_count > 0:
+        strategy = "other"
+        token_handling = (
+            "Permission classes detected but no token or hashing code found; "
+            "the credential check may live outside this repo. Confirm with user."
+        )
     else:
         strategy = "other"
         token_handling = "Auth strategy not auto-detected. Mark UNVERIFIED and ask user."
@@ -253,14 +300,24 @@ def build_auth(code: Dict[str, Any], backend_routes: List[Dict[str, Any]]) -> Di
     protected_prefixes = {m["path_prefix"] for m in middleware_with_prefix}
     protected_routes = []
     for r in backend_routes:
-        for prefix in protected_prefixes:
-            if r["path"].startswith(prefix):
-                protected_routes.append({
-                    "name": f"{r['method']} {r['path']}",
-                    "details": {"method": r["method"], "path": r["path"]},
-                    "evidence": r["evidence"],
-                })
-                break
+        # Two ways a route is protected, and they are both evidence:
+        # an Express mount prefix, or a per-route guard the framework applies
+        # itself (FastAPI `Depends(...)`, DRF `permission_classes`).
+        guarded_by = [
+            name for name in (r.get("middleware") or [])
+            if AUTH_GUARD_HINT.search(name)
+        ]
+        by_prefix = any(r["path"].startswith(prefix) for prefix in protected_prefixes)
+        if not (guarded_by or by_prefix):
+            continue
+        details = {"method": r["method"], "path": r["path"]}
+        if guarded_by:
+            details["guard"] = guarded_by[0]
+        protected_routes.append({
+            "name": f"{r['method']} {r['path']}",
+            "details": details,
+            "evidence": r["evidence"],
+        })
 
     return {
         "strategy": strategy,

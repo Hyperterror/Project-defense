@@ -45,25 +45,30 @@ Both the scanner and the detector honour it.
 ## Phase 2: Static Analysis
 
 **Run `scripts/detect_code_facts.py <repo-root>`.** It performs stack-specific
-code extraction (Express routes, React components, Mongoose models, API calls,
-auth signals) and writes `.project-defense/code-facts.json` with structured
-entries — every entry already has `evidence: { file, lines, excerpt, status }`.
+code extraction (routes for Express, FastAPI/Flask, Django/DRF and Next.js;
+React components; Mongo/SQLAlchemy/Django models; API calls; auth signals
+including jose, passlib, Django auth, DRF permissions and delegated providers)
+and writes `.project-defense/code-facts.json` with structured entries — every
+entry already has `evidence: { file, lines, excerpt, status }`.
 
 You can then merge this into scan-facts.json by reading both files.
 
-**For React + Express + MongoDB (v1 supported stack), verify these specifically:**
+**Verify these specifically:**
 
 | What to find | Where to look | Evidence format |
 |---|---|---|
 | React components | `src/components/`, `src/pages/` | file, lines, export name |
 | React hooks/context | `src/hooks/`, `src/context/` | file, lines, hook name |
 | Express routes | `server/routes/`, `server/app.js` | method, path, handler file:line |
+| FastAPI / Flask routes | decorators above `def` | method, path, handler file:line |
+| Django / DRF routes | `urls.py` urlpatterns, routers | full path (include prefixes joined), action |
+| Next.js routes | `app/api/**/route.ts`, `pages/api/**` | URL derived from the path, exported method |
 | Middleware | `server/middleware/` | file, lines, exported fn |
 | Mongoose models | `server/models/` | model name, schema fields |
 | API calls from frontend | `src/api/`, `src/services/` | endpoint, method, calling file |
 | Auth: JWT handling | `server/middleware/auth.js`, `server/utils/token.js` | file, lines, algorithm |
 | Password hashing | `server/controllers/auth.js`, `server/models/User.js` | file, lines, bcrypt/scrypt |
-| Protected routes | route files using auth middleware | file, lines, middleware name |
+| Protected routes | Express mount prefixes, FastAPI `Depends(...)`, DRF `permission_classes` | file, lines, guard name |
 | Env vars used | `process.env.*`, `os.getenv()` | var name, file, line |
 
 **For anything not covered:** read the code directly and cite it.

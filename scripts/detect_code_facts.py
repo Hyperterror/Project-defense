@@ -5,11 +5,14 @@ detect_code_facts.py -- Stack-specific code detectors for project-defense-skill.
 Reads .project-defense/scan-facts.json (or scans a repo), then extracts:
   - Express routes (router.METHOD(path, ...), app.METHOD(...))
   - Express middleware (app.use(...), router.use(...))
+  - FastAPI / Flask routes (decorators: @app.get('/x'), @app.route('/x', methods=[...]))
+  - Django URLconf routes (path('x', view), include(...)) and DRF router registrations
+  - Next.js file-based routes (app/api/**/route.ts exports, pages/api/**/*.ts)
   - React components (default exports of functions/arrows, function declarations)
   - React hooks (custom hooks from src/hooks/)
   - Mongoose models (mongoose.model(name, schema))
   - API calls from frontend (axios.get/post, fetch(url, {method}))
-  - Authentication signals (JWT verify, bcrypt, password hashing)
+  - Authentication signals (JWT verify, bcrypt, password hashing, Django/DRF auth)
   - Environment variables used in code
 
 Writes results to .project-defense/code-facts.json. Stdlib only, Python 3.8+.
@@ -113,6 +116,26 @@ RE_BCRYPT = re.compile(r"""\bbcrypt\s*\.\s*(hash|compare|genSalt|hashSync|compar
 
 # Password field references (heuristic)
 RE_PASSWORD = re.compile(r"""\b(password|passwd|pwd)\b""", re.IGNORECASE)
+
+# Delegated auth: the provider owns the session, the app only reads cookies.
+RE_JS_PROVIDER_AUTH = re.compile(
+    r"@supabase/ssr|@supabase/auth-helpers-nextjs|supabase\.auth\.(?:getUser|getSession|signIn)"
+    r"|next-auth|signIn\s*\(|useSession\s*\(|auth\(\)\s*\."
+)
+
+# Python auth signals -- the same three facts under different names.
+RE_PY_JWT_SIGNAL = re.compile(r"\bjwt\s*\.\s*(?:encode|decode)\s*\(")
+RE_PY_HASH_SIGNAL = re.compile(
+    r"\bCryptContext\s*\(|\bpasslib\b|\bbcrypt\s*\.\s*(?:hashpw|checkpw|gensalt)\s*\("
+    r"|\bpwd_context\s*\.\s*(?:hash|verify)\s*\("
+)
+RE_PY_SESSION_SIGNAL = re.compile(
+    r"\bauthenticate\s*\(|\bdjango\.contrib\.auth\b|@login_required\b|\blogin\s*\(request"
+)
+RE_PY_PERMISSION_SIGNAL = re.compile(
+    r"\bIsAuthenticated\b|\bIsAdminUser\b|\bJWTAuthentication\b"
+    r"|\bpermission_classes\s*=|@permission_required\b"
+)
 
 
 # ----------------------------------------------------------------------
@@ -615,18 +638,58 @@ def detect_api_calls(root: Path, files: List[Path]) -> List[Dict[str, Any]]:
 
 
 def detect_auth_signals(root: Path, files: List[Path]) -> Dict[str, Any]:
-    """Find authentication-related code patterns."""
+    """Find authentication-related code patterns (JS and Python)."""
     result: Dict[str, Any] = {
         "jwt_verify": [],
         "bcrypt_usage": [],
         "password_handling": [],
+        "session_auth": [],
+        "permissions": [],
+        "provider_auth": [],
     }
     for f in files:
         if should_skip(f, root):
             continue
-        if f.suffix.lower() not in JS_EXTS:
+        suffix = f.suffix.lower()
+        if suffix not in JS_EXTS and suffix not in PY_EXTS:
             continue
         text = read_text(f)
+        if suffix in PY_EXTS:
+            # Python stacks keep the same three facts under different names:
+            # jose/PyJWT for tokens, passlib/bcrypt for hashing, and Django's
+            # own auth for sessions and permissions.
+            for match in RE_PY_JWT_SIGNAL.finditer(text):
+                result["jwt_verify"].append(evidence(
+                    f, root, find_lines(text, match.start()),
+                    make_excerpt(text, match.start(), match.end() + 40),
+                ))
+            for match in RE_PY_HASH_SIGNAL.finditer(text):
+                result["bcrypt_usage"].append({
+                    "call": match.group(0).strip(),
+                    "evidence": evidence(
+                        f, root, find_lines(text, match.start()),
+                        make_excerpt(text, match.start(), match.end() + 40),
+                    ),
+                })
+            for match in RE_PY_SESSION_SIGNAL.finditer(text):
+                result["session_auth"].append(evidence(
+                    f, root, find_lines(text, match.start()),
+                    make_excerpt(text, match.start(), match.end() + 40),
+                ))
+            for match in RE_PY_PERMISSION_SIGNAL.finditer(text):
+                result["permissions"].append({
+                    "name": match.group(0).strip(),
+                    "evidence": evidence(
+                        f, root, find_lines(text, match.start()),
+                        make_excerpt(text, match.start(), match.end() + 40),
+                    ),
+                })
+            continue
+        for m in RE_JS_PROVIDER_AUTH.finditer(text):
+            result["provider_auth"].append(evidence(
+                f, root, find_lines(text, m.start()),
+                make_excerpt(text, m.start(), m.end() + 40),
+            ))
         for m in RE_JWT_VERIFY.finditer(text):
             line_no = find_lines(text, m.start())
             result["jwt_verify"].append(evidence(f, root, line_no, make_excerpt(text, m.start(), m.end() + 40)))
@@ -637,6 +700,566 @@ def detect_auth_signals(root: Path, files: List[Path]) -> Dict[str, Any]:
                 "evidence": evidence(f, root, line_no, make_excerpt(text, m.start(), m.end() + 40)),
             })
     return result
+
+
+# ----------------------------------------------------------------------
+# Python web routes (FastAPI, Flask, Django, DRF)
+# ----------------------------------------------------------------------
+
+# @app.get('/x') / @router.post("/x") / @bp.delete('/x')
+RE_PY_DECORATOR_ROUTE = re.compile(
+    r"^[ \t]*@[ \t]*([A-Za-z_][\w.]*)[ \t]*\.[ \t]*"
+    r"(get|post|put|patch|delete|options|head)[ \t]*\([ \t]*(['\"])([^'\"]*)\3",
+    re.M,
+)
+# @app.route('/x', methods=['POST'])
+RE_PY_DECORATOR_FLASK = re.compile(
+    r"^[ \t]*@[ \t]*([A-Za-z_][\w.]*)[ \t]*\.route[ \t]*\([ \t]*(['\"])([^'\"]*)\2",
+    re.M,
+)
+# router = APIRouter(prefix="/tasks")
+RE_PY_ROUTER_PREFIX = re.compile(r"\b([A-Za-z_]\w*)\s*=\s*(?:fastapi\.)?APIRouter\s*\(")
+# Depends(get_current_user)
+RE_PY_DEPENDS = re.compile(r"Depends\s*\(\s*([A-Za-z_][\w.]*)")
+# Django: path(...) / re_path(...) / url(...)
+RE_DJANGO_PATH_CALL = re.compile(r"\b(re_path|path|url)\s*\(")
+# DRF: router = DefaultRouter() / SimpleRouter()
+RE_DRF_ROUTER_VAR = re.compile(r"\b([A-Za-z_]\w*)\s*=\s*\w*Router\s*\(")
+# DRF: router.register(r"posts", PostViewSet, basename="post")
+RE_DRF_REGISTER = re.compile(
+    r"\b([A-Za-z_]\w*)\s*\.\s*register\s*\(\s*(?:r?['\"]([^'\"]+)['\"]|"
+    r"([A-Za-z_][\w.]*))\s*,\s*([A-Za-z_][\w.]*)"
+)
+RE_PY_VIEW_DEF = re.compile(r"^[ \t]*(?:async[ \t]+)?def[ \t]+([A-Za-z_]\w*)[ \t]*\(", re.M)
+RE_REQUIRE_METHODS = re.compile(r"@require_http_methods\s*\(\s*\[([^\]]*)\]")
+RE_DRF_API_VIEW = re.compile(r"@api_view\s*\(\s*\[([^\]]*)\]")
+RE_REQUIRE_SINGLE = re.compile(r"@require_(POST|GET|PUT|PATCH|DELETE)\b")
+RE_CLASS_VIEWSET = re.compile(r"^[ \t]*class[ \t]+(\w+)[ \t]*\(([^)]*)\)[ \t]*:", re.M)
+
+# A dependency name that reads like access control rather than plumbing.
+AUTH_DEPENDENCY_HINT = re.compile(
+    r"(auth|user|admin|token|permission|login|current|guard|session|jwt|require)",
+    re.I,
+)
+
+HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD")
+
+
+# CRUD methods a DRF viewset class serves, and the action each one maps to.
+VIEWSET_ACTIONS = {
+    "ModelViewSet": [
+        ("GET", "list", ""), ("POST", "create", ""),
+        ("GET", "retrieve", "/{id}"), ("PUT", "update", "/{id}"),
+        ("PATCH", "partial_update", "/{id}"), ("DELETE", "destroy", "/{id}"),
+    ],
+    "ReadOnlyModelViewSet": [
+        ("GET", "list", ""), ("GET", "retrieve", "/{id}"),
+    ],
+}
+
+
+def _join_path(*parts: Optional[str]) -> str:
+    """Join URL fragments into one absolute path ('/api/auth/register')."""
+    segments = []
+    for part in parts:
+        if not part:
+            continue
+        cleaned = part.strip()
+        if cleaned in ("", "^", "$", "^$"):
+            continue
+        # Regex-style Django patterns: drop anchors, keep the literal text.
+        cleaned = cleaned.strip("^").strip("$")
+        cleaned = cleaned.replace("^", "").replace("$", "")
+        for segment in cleaned.split("/"):
+            if segment:
+                segments.append(segment)
+    return "/" + "/".join(segments)
+
+
+def _balanced_call(text: str, open_idx: int) -> Tuple[str, int]:
+    """Return the arguments of the call whose '(' sits at open_idx, and its end."""
+    depth = 0
+    i = open_idx
+    while i < len(text):
+        ch = text[i]
+        if ch in "'\"":
+            quote = ch
+            i += 1
+            while i < len(text) and text[i] != quote:
+                if text[i] == "\\":
+                    i += 1
+                i += 1
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return text[open_idx + 1:i], i
+        i += 1
+    return "", len(text)
+
+
+def _split_args(inner: str) -> List[str]:
+    """Split a call's argument string on top-level commas."""
+    args: List[str] = []
+    depth = 0
+    current: List[str] = []
+    quote = None
+    for ch in inner:
+        if quote:
+            current.append(ch)
+            if ch == quote:
+                quote = None
+            continue
+        if ch in "'\"":
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            args.append("".join(current).strip())
+            current = []
+            continue
+        current.append(ch)
+    if current:
+        args.append("".join(current).strip())
+    return args
+
+
+def _string_literal(expr: str) -> Optional[str]:
+    """Return the value of a Python string literal, or None if it is not one."""
+    match = re.match(r"^[rRbBuU]?(['\"])(.*)\1$", expr.strip(), re.S)
+    return match.group(2) if match else None
+
+
+def _python_signature(text: str, def_start: int, limit: int = 1200) -> str:
+    """Return the parameter list of the function whose `def` starts at def_start."""
+    open_idx = text.find("(", def_start)
+    if open_idx == -1 or open_idx - def_start > limit:
+        return ""
+    inner, _end = _balanced_call(text, open_idx)
+    return inner
+
+
+def _route_dependencies(signature: str) -> List[str]:
+    """Auth-looking `Depends(...)` names in a signature, e.g. get_current_user."""
+    names = []
+    for match in RE_PY_DEPENDS.finditer(signature):
+        name = match.group(1).split(".")[-1]
+        if AUTH_DEPENDENCY_HINT.search(name) and name not in names:
+            names.append(name)
+    return names
+
+
+def _methods_from_decorators(prefix_text: str) -> List[str]:
+    """HTTP methods implied by the decorators directly above a view function."""
+    for match in RE_REQUIRE_METHODS.finditer(prefix_text):
+        methods = [m.strip().strip("'\"").upper() for m in match.group(1).split(",")]
+        methods = [m for m in methods if m in HTTP_METHODS]
+        if methods:
+            return methods
+    for match in RE_DRF_API_VIEW.finditer(prefix_text):
+        methods = [m.strip().strip("'\"").upper() for m in match.group(1).split(",")]
+        methods = [m for m in methods if m in HTTP_METHODS]
+        if methods:
+            return methods
+    single = RE_REQUIRE_SINGLE.search(prefix_text)
+    if single:
+        return [single.group(1)]
+    return []
+
+
+def detect_python_decorator_routes(root: Path, files: List[Path]) -> List[Dict[str, Any]]:
+    """FastAPI and Flask routes, declared as decorators above a view function.
+
+    `@app.get('/tasks')` and `@app.route('/tasks', methods=['POST'])` are the
+    same fact expressed two ways, so both land in one list. A route is marked
+    protected when its signature takes an auth-looking `Depends(...)`, which is
+    how FastAPI expresses access control.
+    """
+    routes: List[Dict[str, Any]] = []
+    seen: Set[Tuple[str, str, str]] = set()
+    for f in files:
+        if should_skip(f, root) or f.suffix.lower() not in PY_EXTS:
+            continue
+        text = read_text(f)
+        if not text:
+            continue
+
+        # Router prefixes: `router = APIRouter(prefix="/tasks")`.
+        prefixes: Dict[str, str] = {}
+        for match in RE_PY_ROUTER_PREFIX.finditer(text):
+            inner, _end = _balanced_call(text, text.find("(", match.start()))
+            prefix_match = re.search(
+                r"\bprefix\s*=\s*(['\"])([^'\"]*)\1", inner
+            )
+            if prefix_match:
+                prefixes[match.group(1)] = prefix_match.group(2)
+
+        decorators: List[Tuple[int, str, List[str], Optional[str]]] = []
+        for match in RE_PY_DECORATOR_ROUTE.finditer(text):
+            receiver = match.group(1).split(".")[0]
+            decorators.append((
+                match.start(),
+                match.group(2).upper(),
+                [match.group(4)],
+                prefixes.get(receiver),
+            ))
+        for match in RE_PY_DECORATOR_FLASK.finditer(text):
+            receiver = match.group(1).split(".")[0]
+            decorators.append((
+                match.start(),
+                "GET",
+                [match.group(3)],
+                prefixes.get(receiver),
+            ))
+        decorators.sort(key=lambda item: item[0])
+
+        for start, method, paths, prefix in decorators:
+            path = paths[0]
+            for candidate in paths:
+                full_path = _join_path(prefix, candidate)
+                # Flask keeps its methods in the call body; re-read them there.
+                methods = [method]
+                if method == "GET":
+                    # The decorator is `@recv.route(...)`: its call paren is the
+                    # first one after the decorator starts.
+                    open_idx = text.find("(", start)
+                    if open_idx != -1 and open_idx < start + 200:
+                        inner, _end = _balanced_call(text, open_idx)
+                        methods_match = re.search(r"\bmethods\s*=\s*\[([^\]]*)\]", inner)
+                        if methods_match:
+                            declared = [
+                                m.strip().strip("'\"").upper()
+                                for m in methods_match.group(1).split(",")
+                            ]
+                            declared = [m for m in declared if m in HTTP_METHODS]
+                            if declared:
+                                methods = declared
+
+                following = RE_PY_VIEW_DEF.search(text, start)
+                handler = following.group(1) if following else Path(f).stem
+                signature = _python_signature(text, following.start()) if following else ""
+                dependencies = _route_dependencies(signature)
+
+                for method_name in methods:
+                    key = (method_name, full_path, handler)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    routes.append({
+                        "method": method_name,
+                        "path": full_path,
+                        "handler": handler,
+                        "middleware": dependencies,
+                        "framework": "fastapi" if prefix is not None or dependencies else "flask",
+                        "evidence": evidence(
+                            f, root,
+                            find_lines(text, start),
+                            make_excerpt(text, start, start + 90),
+                        ),
+                    })
+    return routes
+
+
+def _view_methods(files: List[Path]) -> Dict[str, List[str]]:
+    """Map a Django view function name to the HTTP methods it accepts.
+
+    The methods live in the decorators (`@require_http_methods(["POST"])`),
+    not in the URLconf, so they are read once and looked up per URL entry.
+    """
+    methods: Dict[str, List[str]] = {}
+    for f in files:
+        if f.suffix.lower() not in PY_EXTS:
+            continue
+        text = read_text(f)
+        for match in RE_PY_VIEW_DEF.finditer(text):
+            name = match.group(1)
+            preceding = text[max(0, match.start() - 400):match.start()]
+            declared = _methods_from_decorators(preceding)
+            if declared and name not in methods:
+                methods[name] = declared
+    return methods
+
+
+def _resolve_django_module(root: Path, dotted: str, files: List[Path]) -> Optional[Path]:
+    """Resolve a module specifier from `include("blog.auth_urls")` to a file."""
+    suffix = dotted.replace(".", "/") + ".py"
+    for path in files:
+        if path.suffix.lower() not in PY_EXTS:
+            continue
+        rel = path.relative_to(root).as_posix()
+        if rel == suffix or rel.endswith("/" + suffix):
+            return path
+    return None
+
+
+def _django_url_entries(text: str) -> List[Tuple[int, str, str]]:
+    """Return (line, pattern, target-expression) for each URL entry in a file."""
+    entries: List[Tuple[int, str, str]] = []
+    for match in RE_DJANGO_PATH_CALL.finditer(text):
+        open_idx = text.find("(", match.start())
+        if open_idx == -1:
+            continue
+        inner, _end = _balanced_call(text, open_idx)
+        args = _split_args(inner)
+        if len(args) < 2:
+            continue
+        pattern = _string_literal(args[0])
+        if pattern is None:
+            continue  # e.g. `path(module.route_name, ...)`: not a literal we trust
+        entries.append((find_lines(text, match.start()), pattern, args[1]))
+    return entries
+
+
+def _collect_viewsets(root: Path, files: List[Path]) -> Dict[str, Dict[str, Any]]:
+    """Index DRF viewsets by class name: the actions and permissions they serve.
+
+    A viewset is defined in `views.py` but registered in `urls.py`, so the two
+    facts have to be joined across files -- otherwise every route looks like a
+    pair of plain GETs and nothing is marked protected.
+    """
+    viewsets: Dict[str, Dict[str, Any]] = {}
+    for f in files:
+        if should_skip(f, root) or f.suffix.lower() not in PY_EXTS:
+            continue
+        text = read_text(f)
+        for match in RE_CLASS_VIEWSET.finditer(text):
+            name, bases = match.group(1), match.group(2)
+            actions = None
+            for base_cls, declared in VIEWSET_ACTIONS.items():
+                if base_cls in bases:
+                    actions = declared
+                    break
+            if actions is None:
+                continue
+            body = text[match.end():match.end() + 2000]
+            permissions: List[str] = []
+            perms_match = re.search(r"permission_classes\s*=\s*\[([^\]]*)\]", body)
+            if perms_match:
+                permissions = [
+                    n.split(".")[-1].strip()
+                    for n in perms_match.group(1).split(",")
+                ]
+                permissions = [n for n in permissions if n and n != "AllowAny"]
+            viewsets[name] = {"actions": actions, "permissions": permissions}
+    return viewsets
+
+
+DEFAULT_VIEWSET_ACTIONS = [("GET", "list", ""), ("GET", "retrieve", "/{id}")]
+
+
+def detect_django_routes(root: Path, files: List[Path]) -> List[Dict[str, Any]]:
+    """Django URLconf routes and DRF router registrations.
+
+    Django URLs are composed by `include(...)`, so a path is only complete when
+    the include chain is walked: `path("api/auth/", include("blog.auth_urls"))`
+    plus `path("register", views.register)` is `/api/auth/register`. DRF routes
+    are registered on a router instead and take their prefix from the `include`
+    of `router.urls` -- a router included that way is not emitted a second time
+    without its prefix.
+    """
+    routes: List[Dict[str, Any]] = []
+    seen: Set[Tuple[str, str, str]] = set()
+    view_methods = _view_methods(files)
+    viewsets = _collect_viewsets(root, files)
+    included_routers: Set[Tuple[Path, str]] = set()
+
+    urlconf_files: Dict[Path, List[Tuple[int, str, str]]] = {}
+    for f in files:
+        if should_skip(f, root) or f.suffix.lower() not in PY_EXTS:
+            continue
+        text = read_text(f)
+        if "urlpatterns" not in text:
+            continue
+        entries = _django_url_entries(text)
+        if entries:
+            urlconf_files[f] = entries
+    if not urlconf_files:
+        return routes
+
+    def add(method: str, path: str, handler: str, file: Path, line: int,
+            excerpt: str, middleware: Optional[List[str]] = None) -> None:
+        key = (method, path, handler)
+        if key in seen:
+            return
+        seen.add(key)
+        routes.append({
+            "method": method,
+            "path": path,
+            "handler": handler,
+            "middleware": middleware or [],
+            "framework": "django",
+            "evidence": evidence(file, root, line, excerpt),
+        })
+
+    def add_router(file: Path, prefix: str, text: str, router_var: str) -> None:
+        for reg in RE_DRF_REGISTER.finditer(text):
+            if reg.group(1) != router_var:
+                continue
+            registered = reg.group(2) or reg.group(3) or ""
+            viewset = reg.group(4).split(".")[-1]
+            info = viewsets.get(viewset, {})
+            actions = info.get("actions") or DEFAULT_VIEWSET_ACTIONS
+            permissions = info.get("permissions") or []
+            base = _join_path(prefix, registered)
+            for method, action, suffix in actions:
+                add(method, base + suffix, "%s.%s" % (viewset, action),
+                    file, find_lines(text, reg.start()),
+                    make_excerpt(text, reg.start(), reg.end() + 20),
+                    permissions)
+
+    def walk(file: Path, prefix: str, depth: int = 0) -> None:
+        if depth > 5:  # an include cycle is a real thing in old projects
+            return
+        text = read_text(file)
+        for line, pattern, target in urlconf_files.get(file, []):
+            if re.match(r"include\s*\(", target):
+                body = target[target.find("(") + 1:target.rfind(")")]
+                inner_arg = _split_args(body)[0] if body else ""
+                module = _string_literal(inner_arg)
+                if module:
+                    child = _resolve_django_module(root, module, files)
+                    if child is not None:
+                        walk(child, _join_path(prefix, pattern), depth + 1)
+                    continue
+                # include(router.urls): the router's routes start at this prefix.
+                router_var = inner_arg.split(".")[0].strip()
+                included_routers.add((file, router_var))
+                add_router(file, _join_path(prefix, pattern), text, router_var)
+                continue
+
+            if target.startswith("admin."):
+                continue  # the Django admin is framework code, not this project's
+
+            view_name = target.split(".")[-1].strip()
+            methods = view_methods.get(view_name) or ["GET"]
+            excerpt_start = read_text(file).find(target)
+            excerpt = make_excerpt(text, max(excerpt_start, 0), max(excerpt_start, 0) + 60)
+            for method in methods:
+                add(method, _join_path(prefix, pattern), target.strip(),
+                    file, line, excerpt)
+
+    # Roots: URLconfs that no other module includes.
+    included_modules: Set[str] = set()
+    for file in urlconf_files:
+        text = read_text(file)
+        for match in re.finditer(r"include\s*\(\s*['\"]([\w.]+)['\"]", text):
+            included_modules.add(match.group(1))
+
+    for file in sorted(urlconf_files):
+        rel = file.relative_to(root).as_posix()
+        module = rel[:-3].replace("/", ".") if rel.endswith(".py") else rel
+        if module in included_modules or module.endswith(".__init__"):
+            continue
+        walk(file, "")
+        # Routers in this file that nothing included still serve their routes,
+        # just without a prefix.
+        text = read_text(file)
+        for router_match in RE_DRF_ROUTER_VAR.finditer(text):
+            router_var = router_match.group(1)
+            if (file, router_var) in included_routers:
+                continue
+            add_router(file, "", text, router_var)
+
+    return routes
+
+
+# ----------------------------------------------------------------------
+# Next.js file-based routes
+# ----------------------------------------------------------------------
+
+RE_NEXT_EXPORT_METHOD = re.compile(
+    r"export\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b"
+    r"|export\s+const\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*="
+)
+RE_NEXT_REQ_METHOD = re.compile(
+    r"req\.method\s*===?\s*['\"](GET|POST|PUT|PATCH|DELETE)['\"]"
+)
+
+
+def _nextjs_path(rel_parts: Tuple[str, ...]) -> Optional[str]:
+    """Turn a Next.js route file path into the URL it serves."""
+    parts = list(rel_parts)
+    filename = parts[-1]
+    stem, _, _ext = filename.rpartition(".")
+    if not stem:
+        return None
+
+    if "app" in parts:
+        app_idx = len(parts) - 1 - list(reversed(parts)).index("app")
+        if stem != "route":
+            return None  # a page, not an API route
+        segments = parts[app_idx + 1:-1]
+    elif "pages" in parts:
+        pages_idx = len(parts) - 1 - list(reversed(parts)).index("pages")
+        segments = parts[pages_idx + 1:-1]
+        if not segments or segments[0] != "api":
+            return None
+        if stem != "index":
+            segments = segments + [stem]
+    else:
+        return None
+
+    cleaned = []
+    for segment in segments:
+        if segment.startswith("[[...") or segment.startswith("[..."):
+            cleaned.append("{" + segment.strip("[]").lstrip(".") + "}")
+        elif segment.startswith("[") and segment.endswith("]"):
+            cleaned.append("{" + segment[1:-1] + "}")
+        else:
+            cleaned.append(segment)
+    return "/" + "/".join(cleaned)
+
+
+def detect_nextjs_routes(root: Path, files: List[Path]) -> List[Dict[str, Any]]:
+    """Next.js API routes, which are files rather than declarations.
+
+    App Router files (`app/api/x/route.ts`) export one function per method.
+    Pages Router files (`pages/api/x.ts`) export one handler and branch on
+    `req.method`, so the methods are read from those comparisons.
+    """
+    routes: List[Dict[str, Any]] = []
+    for f in files:
+        if should_skip(f, root) or f.suffix.lower() not in JS_EXTS:
+            continue
+        rel_parts = f.relative_to(root).parts
+        path = _nextjs_path(rel_parts)
+        if not path:
+            continue
+        text = read_text(f)
+        if not text:
+            continue
+
+        declared: List[Tuple[str, int]] = []
+        for match in RE_NEXT_EXPORT_METHOD.finditer(text):
+            method = match.group(1) or match.group(2)
+            declared.append((method, find_lines(text, match.start())))
+        if not declared:
+            for match in RE_NEXT_REQ_METHOD.finditer(text):
+                declared.append((match.group(1), find_lines(text, match.start())))
+        if not declared:
+            declared.append(("GET", 1))
+
+        app_router = "app" in rel_parts
+        seen_methods: Set[str] = set()
+        for method, line in declared:
+            if method in seen_methods:
+                continue
+            seen_methods.add(method)
+            routes.append({
+                "method": method,
+                "path": path,
+                # App Router files export one function per method, so the
+                # export name IS the handler. A Pages Router file exports one
+                # default handler that branches on req.method.
+                "handler": method if app_router else "handler",
+                "middleware": [],
+                "framework": "nextjs",
+                "evidence": evidence(f, root, line, "%s -> %s %s" % (f.name, method, path)),
+            })
+    return routes
 
 
 # ----------------------------------------------------------------------
@@ -702,6 +1325,15 @@ def detect_all(root: Path) -> Dict[str, Any]:
             "routes": detect_express_routes(root, files),
             "middleware": detect_express_middleware(root, files),
         },
+        "python": {
+            "routes": (
+                detect_python_decorator_routes(root, files)
+                + detect_django_routes(root, files)
+            ),
+        },
+        "nextjs": {
+            "routes": detect_nextjs_routes(root, files),
+        },
         "mongoose": {
             "models": detect_mongoose_models(root, files),
         },
@@ -743,6 +1375,8 @@ def main():
     print(f"Files scanned:   {facts['files_scanned']}")
     print(f"Express routes:  {len(facts['express']['routes'])}")
     print(f"Express mw:      {len(facts['express']['middleware'])}")
+    print(f"Python routes:   {len(facts['python']['routes'])}")
+    print(f"Next.js routes:  {len(facts['nextjs']['routes'])}")
     print(f"Mongoose models: {len(facts['mongoose']['models'])}")
     print(f"React components:{len(facts['react']['components'])}")
     print(f"React hooks:     {len(facts['react']['hooks'])}")

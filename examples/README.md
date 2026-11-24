@@ -6,10 +6,20 @@ the detectors and to serve as fixtures for the §15 validation plan.
 
 | Project | Stack | Detector coverage | Use it to test |
 |---|---|---|---|
-| [example-todo-app](./example-todo-app/) | React + Express + MongoDB | **Full** (v1 supported) | End-to-end workflow: scan + detect + build + verify |
-| [example-django-blog](./example-django-blog/) | Django + DRF + PostgreSQL | **Partial** | Python ORM models, JWT, Django URL patterns (manual) |
-| [example-fastapi-tasks](./example-fastapi-tasks/) | FastAPI + SQLAlchemy + SQLite | **Partial** | Python ORM models, JWT, FastAPI routes (manual) |
-| [example-nextjs-todo](./example-nextjs-todo/) | Next.js 14 + Supabase | **Partial** | React components, fetch calls, env var detection |
+| [example-todo-app](./example-todo-app/) | React + Express + MongoDB | **Full** | End-to-end workflow: scan + detect + build + verify |
+| [example-django-blog](./example-django-blog/) | Django + DRF + PostgreSQL | **Full** for routes, auth, models | URLconf `include()` chaining, DRF router + permission classes |
+| [example-fastapi-tasks](./example-fastapi-tasks/) | FastAPI + SQLAlchemy + SQLite | **Full** for routes, auth, models | Decorator routes, `Depends()` guards, jose JWT |
+| [example-nextjs-todo](./example-nextjs-todo/) | Next.js 14 + Supabase | **Full** for routes, auth, components | File-based routes (`app/api/**/route.ts`), delegated cookie auth |
+
+Each example produces routes, an auth strategy and models from code alone, so
+the generated question bank is project-specific in all four:
+
+| Project | Routes | Protected routes | Questions |
+|---|---|---|---|
+| example-todo-app | 7 | 4 | 17 |
+| example-django-blog | 15 | 12 | 9 |
+| example-fastapi-tasks | 7 | 4 | 10 |
+| example-nextjs-todo | 4 | 0 | 9 |
 
 ## What "full" vs "partial" means
 
@@ -22,10 +32,11 @@ the detectors and to serve as fixtures for the §15 validation plan.
 - Protected routes
 - Risk flags (e.g., no tests)
 
-**Partial coverage** means the detectors find *some* facts but the agent
-must read code manually to fill gaps. The skill's instructions
-(instructions/01-analyze-and-verify.md, Phase 3) tell the agent to do
-exactly this.
+**Partial coverage** (what remains true for every stack) means the agent must
+read code manually to fill gaps — chiefly the service/controller layer, user
+flows and data flows. The skill's instructions
+(instructions/01-analyze-and-verify.md, Phase 3) tell the agent to do exactly
+this, and to mark what it could not verify.
 
 ## Running the workflow on each
 

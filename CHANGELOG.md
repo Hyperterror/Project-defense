@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Route extraction for four more frameworks.** `detect_code_facts.py` now finds routes in FastAPI/Flask (decorators, `APIRouter(prefix=...)`), Django (`path()`/`re_path()` with `include()` chains resolved into full paths, DRF `router.register(...)` expanded into its real actions) and Next.js (`app/api/**/route.ts` exports, `pages/api/**` method branches). Previously only Express was recognised, so a Django, FastAPI or Next.js project produced no routes at all and its question bank collapsed to 5-7 generic questions. Now: Django 5 -> 9, FastAPI 6 -> 10, Next.js 7 -> 9, and each with project-specific questions instead of filler.
+- **Protected-route detection per framework.** FastAPI `Depends(get_current_user)` and DRF `permission_classes = [IsAuthenticated]` now mark routes as protected, joining Express mount prefixes. Django example: 12 of 15 routes.
+- **Python and delegated auth signals.** jose/PyJWT, passlib/bcrypt, Django `authenticate`/`login`/`@login_required`, DRF permission classes, and JS providers (Supabase SSR, NextAuth/Auth.js) are all read, so `auth.strategy` is no longer `other` for those stacks (delegated providers resolve to `cookie`).
+- **Auth-flow and frontend/backend-contract questions.** When protected routes exist, the bank asks how a request proves who the caller is (guard named). When the frontend calls endpoints, it asks to trace one call end to end and to name any call with no matching route.
+- **`tests/test_framework_detection.py`** (18 tests) pinning every detector above, plus feature resolution, challenge relocation and coding-question grouping.
+
+### Changed
+- **One coding question per resource, not per route.** A DRF viewset serving six verbs produced six near-identical questions; routes are now grouped by resource (16 -> 4 coding questions on the Django example) and the question names the sibling methods, so nothing in the graph goes unmentioned.
+- **Practice challenges relocate to the defining file.** `--feature PostViewSet.destroy` used to resolve to `urls.py` and refuse ("the starter would be identical"); `generate_challenge.py` now finds the file that defines the handler (class or function) and builds the exercise there.
+- Failure-scenario questions rephrased so any risk sentence reads correctly ("Your project has this known weakness: X. If it were exercised in production...") instead of splicing text into "what happens when ...?".
+- The generic `auth` walkthrough question is skipped when the dedicated auth-flow question is generated, so the same ground is not covered twice.
+
 ## [0.5.0] - 2026-11-25
 
 First tagged release of the verification loop: the analysis now carries edges and
